@@ -959,41 +959,7 @@ For more details, please refer to the [official documentation](https://musicdl.r
 | 🌐 **FreeGPTHub**<br/>真正免费的GPT统一接口                | [![Stars](https://img.shields.io/github/stars/CharlesPikachu/FreeGPTHub?style=flat-square)](https://github.com/CharlesPikachu/FreeGPTHub)             | [![Version](https://img.shields.io/pypi/v/freegpthub)](https://pypi.org/project/freegpthub)                | [![Last Commit](https://img.shields.io/github/last-commit/CharlesPikachu/FreeGPTHub?style=flat-square)](https://github.com/CharlesPikachu/FreeGPTHub/commits/main)               | [🛠 Repository](https://github.com/CharlesPikachu/FreeGPTHub)        |
 
 
-# 📚 Citation
-
-If you use this project in your research, please cite the repository.
-
-```
-@misc{musicdl2020,
-    author = {Zhenchao Jin},
-    title = {Musicdl: A lightweight music downloader written in pure python},
-    year = {2020},
-    publisher = {GitHub},
-    journal = {GitHub repository},
-    howpublished = {\url{https://github.com/CharlesPikachu/musicdl}},
-}
-```
 
 
-# 🌟 Star History
-
-<a href="https://www.star-history.com/?repos=CharlesPikachu%2Fmusicdl&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=CharlesPikachu/musicdl&type=date&theme=dark&legend=top-left&sealed_token=JEeexjndxWne-Z59JgGSPycgRXy-qMfcbkWrJPLUwQ9SGspx0WVAS0Njsc0uUK5JFIjNwqi-u7Zut2LEXgbXLpoLU7vzk0hqUQ9EAnJ3uN2Eu6XEjQFzng" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=CharlesPikachu/musicdl&type=date&legend=top-left&sealed_token=JEeexjndxWne-Z59JgGSPycgRXy-qMfcbkWrJPLUwQ9SGspx0WVAS0Njsc0uUK5JFIjNwqi-u7Zut2LEXgbXLpoLU7vzk0hqUQ9EAnJ3uN2Eu6XEjQFzng" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=CharlesPikachu/musicdl&type=date&legend=top-left&sealed_token=JEeexjndxWne-Z59JgGSPycgRXy-qMfcbkWrJPLUwQ9SGspx0WVAS0Njsc0uUK5JFIjNwqi-u7Zut2LEXgbXLpoLU7vzk0hqUQ9EAnJ3uN2Eu6XEjQFzng" />
- </picture>
-</a>
 
 
-# ☕ Appreciation (赞赏 / 打赏)
-
-| WeChat Appreciation QR Code (微信赞赏码)                                                                                       | Alipay Appreciation QR Code (支付宝赞赏码)                                                                                     |
-| :--------:                                                                                                                     | :----------:                                                                                                                   |
-| <img src="https://raw.githubusercontent.com/CharlesPikachu/musicdl/master/.github/pictures/wechat_reward.jpg" width="260" />   | <img src="https://raw.githubusercontent.com/CharlesPikachu/musicdl/master/.github/pictures/alipay_reward.png" width="260" />   |
-
-
-# 📢 WeChat Official Account (微信公众号):
-
-Charles的皮卡丘 (*Charles_pikachu*)  
-![img](https://raw.githubusercontent.com/CharlesPikachu/musicdl/master/docs/pikachu.jpg)
