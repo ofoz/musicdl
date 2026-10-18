@@ -354,6 +354,70 @@ python -m musicdl.web --host 0.0.0.0 --port 5050 --work-dir ./my_downloads --no-
 
 ---
 
+#### 🐳 Docker & 1Panel + OpenResty 生产部署指南
+
+针对 Linux 服务器环境，推荐使用 Docker 容器化编排并配合 1Panel + OpenResty 进行反向代理与 HTTPS 证书托管：
+
+##### 1. Docker / Docker Compose 快速构建运行
+
+项目根目录已内置轻量 `Dockerfile` 与 `docker-compose.yml`（已集成 ffmpeg 音频处理与健康检查）：
+
+```bash
+# 1. 克隆仓库
+git clone https://github.com/ofoz/musicdl.git
+cd musicdl
+
+# 2. 一键构建并后台启动
+docker compose up -d --build
+
+# 3. 检查容器状态
+docker compose ps
+```
+
+- 默认仅绑定宿主机 `127.0.0.1:5050`，最大化服务器安全，避免公网裸露端口。
+- 下载的文件及歌单数据将自动持久化至宿主机 `./downloads` 目录。
+
+##### 2. 1Panel 面板操作步骤
+
+1. **容器编排**：
+   - 进入 1Panel 控制台 ->【容器】->【编排】-> 点击【创建编排】。
+   - 命名为 `musicdl`，可直接粘贴项目中的 `docker-compose.yml` 内容并确认创建。
+2. **创建反代网站**：
+   - 进入 1Panel 控制台 ->【网站】-> 点击【创建网站】-> 选择【反向代理】。
+   - 主域名：填写您的域名（如 `music.yourdomain.com`）。
+   - 代理地址：填写 `127.0.0.1:5050`。
+   - 点击【确定】生成站点。
+   - 在【网站列表】中为您新建的站点申请并启用 **HTTPS 证书**。
+
+##### 3. OpenResty / Nginx 专属反代配置调优（⚠️ 核心关键）
+
+为了让 **SSE 流式搜索** 的毫秒级边搜边出效果不被 Nginx 缓存拦截，并保证 **HTTP Range 音频流在线即点即播**，请在 1Panel 网站详情 ->【配置文件】中，将反代 `location /` 段或全局增加以下优化参数：
+
+```nginx
+# 基础长连接与 Header 透传
+proxy_http_version 1.1;
+proxy_set_header Connection "";
+proxy_set_header Host $host;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+
+# 1. 关键：支持 HTTP Range 范围请求，实现在线音频任意拖拽快进与即点即播
+proxy_set_header Range $http_range;
+proxy_set_header If-Range $http_if_range;
+
+# 2. 关键：关闭缓冲，实现 SSE 流式搜索结果实时直推到前端
+proxy_buffering off;
+proxy_cache off;
+chunked_transfer_encoding on;
+
+# 3. 超时优化：避免超大歌单批量解析时被提前断开
+proxy_read_timeout 600s;
+proxy_send_timeout 600s;
+```
+
+---
+
 #### Typical Usage
 
 (1) Run Musicdl in Interactive Mode

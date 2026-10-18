@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  musicdl:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: musicdl:latest
+    container_name: musicdl-web
+    restart: unless-stopped
+    ports:
+      # 推荐仅绑定本地 127.0.0.1，前端交由 OpenResty 反向代理
+      # 如需直接外网访问，可改为 "5050:5050"
+      - "127.0.0.1:5050:5050"
+    volumes:
+      # 持久化保存下载的音乐和缓存数据
+      - ./downloads:/app/downloads
+    environment:
+      - TZ=Asia/Shanghai
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"

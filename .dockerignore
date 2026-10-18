@@ -1,0 +1,17 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+musicdl_outputs/
+musicdl_web_downloads/
+*.egg-info/
+dist/
+build/
+tests/
+.dockerignore
+Dockerfile
+docker-compose.yml
