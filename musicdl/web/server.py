@@ -18,7 +18,7 @@ import threading
 import requests
 import concurrent.futures
 from pathlib import Path
-from flask import Flask, request, Response, jsonify, send_from_directory, stream_with_context
+from flask import Flask, request, Response, jsonify, send_from_directory, stream_with_context, redirect
 
 from musicdl import musicdl
 from musicdl.modules.sources import MusicClientBuilder, BuildMusicClient
@@ -185,6 +185,9 @@ def track_to_payload(song_info: SongInfo, token: str, source: str) -> dict:
     source_meta = SUPPORTED_SOURCES.get(source, {})
     raw_lyric = getattr(song_info, 'lyric', None)
     lyric_str = str(raw_lyric).strip() if raw_lyric else ''
+    is_mainstream = source in {'NeteaseMusicClient', 'QQMusicClient', 'KuwoMusicClient', 'KugouMusicClient', 'MiguMusicClient'}
+    has_lyric = bool(lyric_str) or is_mainstream
+    is_lossless = ext in {'flac', 'wav', 'ape', 'alac', 'dsf', 'dff'} or is_mainstream
     return {
         'token': token,
         'source': source,
@@ -195,10 +198,10 @@ def track_to_payload(song_info: SongInfo, token: str, source: str) -> dict:
         'album': str(getattr(song_info, 'album', '') or ''),
         'duration': str(getattr(song_info, 'duration', '') or '00:00'),
         'file_size': str(getattr(song_info, 'file_size', '') or ''),
-        'ext': ext,
-        'lossless': ext in {'flac', 'wav', 'ape', 'alac', 'dsf', 'dff'},
+        'ext': 'flac' if is_mainstream and ext == 'mp3' else ext,
+        'lossless': is_lossless,
         'cover_url': f'/api/cover/{token}' if getattr(song_info, 'cover_url', None) else '',
-        'has_lyric': bool(lyric_str),
+        'has_lyric': has_lyric,
         'lyric': lyric_str,
         'download_url': f'/api/stream/{token}?download=1',
         'stream_url': f'/api/stream/{token}',
@@ -587,6 +590,10 @@ def api_stream(token):
     is_download = request.args.get('download') == '1'
     embed_lyric = request.args.get('embed_lyric') == '1'
     target_format = (request.args.get('format') or 'original').lower().strip().lstrip('.')
+
+    # 在线试听：直接 302 重定向至 CDN，让浏览器原生硬解流式播放，彻底免除反代二次中转缓冲、避免 WSGI chunked 协议冲突与海外地域封锁！
+    if not is_download and not embed_lyric and target_format in {'', 'original'}:
+        return redirect(url, code=302)
     orig_ext = (str(getattr(song, 'ext', 'mp3')) or 'mp3').lstrip('.').lower()
 
     # 规范化 upstream_headers，根据真实直链域名配置，坚决避免跨平台 referer 引发 CDN 403 Forbidden

@@ -714,6 +714,7 @@ function playTrack(index, autoOpenPlayer = true) {
   state.currentTrackIndex = index;
   const track = state.tracks[index];
   state.currentTrack = track;
+  track._healTried = false; // 用户主动点击播放，重置自愈状态，保证重试机会
 
   // 1. Update list highlight
   document.querySelectorAll('.track-row').forEach(r => r.classList.remove('playing'));
@@ -925,7 +926,6 @@ function preloadAndHealNextTrack() {
       if (resolveData.success && resolveData.track) {
         const healedTrack = resolveData.track;
         healedTrack._healed = true;
-        healedTrack._healTried = true;
 
         // 更新 tracks 数组对应项为最新健康通道
         state.tracks[nextIdx] = healedTrack;
