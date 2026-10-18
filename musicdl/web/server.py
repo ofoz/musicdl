@@ -15,7 +15,9 @@ import queue
 import tempfile
 import urllib.parse
 import threading
+import html
 import requests
+import json_repair
 import concurrent.futures
 from pathlib import Path
 from flask import Flask, request, Response, jsonify, send_from_directory, stream_with_context, redirect
@@ -484,35 +486,106 @@ def resolve_netease_direct_url(song_id):
     return None
 
 
-def resolve_kuwo_direct_url(song_name, singers=''):
-    """通过酷我官方轻量接口极速获取 CDN 直链（严格过滤 80KB 下架播报假音频）"""
-    if not song_name:
-        return None
-    s_name, c_singer = clean_music_query(song_name, singers)
-    query = f"{s_name} {c_singer}".strip() if c_singer else s_name
-    try:
-        url = f"http://search.kuwo.cn/r.s?client=kt&all={urllib.parse.quote(query)}&pn=0&rn=1&rformat=json&encoding=utf8"
-        resp = requests.get(url, timeout=(2, 3), headers={'User-Agent': 'Mozilla/5.0'})
-        m = re.search(r"['\"]MUSICRID['\"]\s*:\s*['\"](?:MUSIC_)?(\d+)['\"]", resp.text)
-        if m:
-            rid = m.group(1)
+def is_singer_match(target_singers, cand_artists, song_name, cand_name):
+    """严格比对歌手与过滤翻唱，保证绝不货不对板"""
+    raw_name = str(song_name or '').lower()
+    c_name = str(cand_name or '').lower()
+    # 翻唱与改编一票否决黑名单
+    for bad_tag in ['翻唱', 'cover', '改编', 'dj版', '伴奏', 'instrumental']:
+        if bad_tag not in raw_name and bad_tag in c_name:
+            return False
+
+    if not target_singers:
+        return True
+    
+    # 拆解目标歌手
+    raw_singers = re.split(r'[/,、;&\s]+', str(target_singers or '').strip())
+    targets = [s.strip().lower() for s in raw_singers if s.strip() and s.strip() not in {'未知歌手', '未知艺人'}]
+    if not targets:
+        return True
+
+    # 拆解候选歌手
+    cands = [str(a or '').strip().lower() for a in cand_artists if str(a or '').strip()]
+    if not cands:
+        return False
+
+    for t in targets:
+        for c in cands:
+            if t == c or t in c or c in t:
+                return True
+    return False
+
+
+def resolve_kuwo_direct_url(song_name, singers='', song_id=None):
+    """通过酷我官方接口获取 CDN 直链（严格歌手匹配，过滤 80KB 下架播报假音频）"""
+    # 1. 若本身传入了酷我原生 ID（如酷我歌单），直接验证该 ID 直链
+    if song_id:
+        rid = str(song_id).removeprefix('MUSIC_')
+        try:
             play_url_api = f"http://antiserver.kuwo.cn/anti.s?type=convert_url&rid={rid}&format=mp3&response=url"
             play_resp = requests.get(play_url_api, timeout=(2, 3), headers={'User-Agent': 'Mozilla/5.0'})
             res_url = play_resp.text.strip()
-            if res_url.startswith('http'):
-                # 坚决过滤酷我官方下架假音频 (81629 字节提示音 "当前音乐已从酷我音乐下线")
-                if '563182854' in res_url:
-                    return None
+            if res_url.startswith('http') and '563182854' not in res_url:
                 try:
                     head_resp = requests.head(res_url, timeout=2, headers={'User-Agent': 'Mozilla/5.0'})
                     clen = int(head_resp.headers.get('Content-Length', 0) or 0)
-                    if 0 < clen < 150 * 1024:
-                        return None
+                    if clen == 0 or clen >= 150 * 1024:
+                        return res_url
                 except Exception:
-                    pass
-                return res_url
-    except Exception:
-        pass
+                    return res_url
+        except Exception:
+            pass
+
+    if not song_name:
+        return None
+
+    s_name, c_singer = clean_music_query(song_name, singers)
+    query = f"{s_name} {c_singer}".strip() if c_singer else s_name
+
+    # 2. 搜索并严格遍历候选结果进行歌手与非翻唱匹配
+    search_urls = [
+        f"http://www.kuwo.cn/search/searchMusicBykeyWord?vipver=1&client=kt&ft=music&cluster=0&strategy=2012&encoding=utf8&rformat=json&mobi=1&issubtitle=1&show_copyright_off=1&pn=0&rn=5&all={urllib.parse.quote(query)}",
+        f"http://search.kuwo.cn/r.s?client=kt&all={urllib.parse.quote(query)}&pn=0&rn=5&rformat=json&encoding=utf8"
+    ]
+
+    for s_url in search_urls:
+        try:
+            resp = requests.get(s_url, timeout=(2, 3), headers={'User-Agent': 'Mozilla/5.0'})
+            try:
+                data = json_repair.loads(resp.text) or {}
+            except Exception:
+                data = {}
+            items = data.get('abslist') or []
+            for item in items:
+                cand_artist = html.unescape(item.get('ARTIST', '')).replace('\xa0', ' ')
+                cand_name = html.unescape(item.get('SONGNAME', '')).replace('\xa0', ' ')
+                
+                # 严格歌手比对与翻唱过滤
+                if not is_singer_match(singers, [cand_artist], song_name, cand_name):
+                    continue
+
+                rid = str(item.get('MUSICRID', '')).removeprefix('MUSIC_')
+                if not rid:
+                    continue
+
+                play_url_api = f"http://antiserver.kuwo.cn/anti.s?type=convert_url&rid={rid}&format=mp3&response=url"
+                play_resp = requests.get(play_url_api, timeout=(2, 3), headers={'User-Agent': 'Mozilla/5.0'})
+                res_url = play_resp.text.strip()
+                if res_url.startswith('http'):
+                    # 坚决过滤酷我官方下架假音频 (81629 字节提示音 "当前音乐已从酷我音乐下线")
+                    if '563182854' in res_url:
+                        continue
+                    try:
+                        head_resp = requests.head(res_url, timeout=2, headers={'User-Agent': 'Mozilla/5.0'})
+                        clen = int(head_resp.headers.get('Content-Length', 0) or 0)
+                        if 0 < clen < 150 * 1024:
+                            continue
+                    except Exception:
+                        pass
+                    return res_url
+        except Exception:
+            continue
+
     return None
 
 
@@ -690,7 +763,7 @@ def resolve_fast_lrc(song_name, singers='', song_id=None):
 
 
 def resolve_by_netease_search(song_name, singers=''):
-    """通过网易云云搜索 0.3秒跨平台对齐获取官方高品质播放直链"""
+    """通过网易云云搜索获取官方高品质播放直链（严格歌手比对，绝不返回非原唱翻唱）"""
     if not song_name:
         return None
     s_name, c_singer = clean_music_query(song_name, singers)
@@ -703,10 +776,15 @@ def resolve_by_netease_search(song_name, singers=''):
     }
     for q in queries:
         try:
-            sr_url = f"https://music.163.com/api/cloudsearch/pc?s={urllib.parse.quote(q)}&type=1&offset=0&limit=3"
+            sr_url = f"https://music.163.com/api/cloudsearch/pc?s={urllib.parse.quote(q)}&type=1&offset=0&limit=5"
             r = requests.post(sr_url, headers=headers, timeout=(3, 5), verify=False).json()
             songs = safe_dict_extract(r, ['result', 'songs'], [])
             for s in (songs or []):
+                cand_name = s.get('name', '')
+                cand_artists = [a.get('name', '') for a in s.get('ar', []) if a.get('name')]
+                # 严格歌手比对：若不是该歌手那一版，坚决跳过，绝不货不对板！
+                if not is_singer_match(singers, cand_artists, song_name, cand_name):
+                    continue
                 sid = s.get('id')
                 if sid:
                     url = resolve_netease_direct_url(sid)
@@ -718,41 +796,58 @@ def resolve_by_netease_search(song_name, singers=''):
 
 
 def resolve_instant_stream(song, entry):
-    """0.3~0.8 秒按需即时获取直链，彻底代替慢速的 client.search() 避免反代 504 超时"""
+    """按平台精准定位直链：原歌单平台优先直达，对应歌手严格对齐，绝不货不对板"""
     url = getattr(song, 'download_url', None)
     if url and str(url).startswith('http'):
         return url
 
     raw_search = getattr(song, 'raw_data', {}).get('search', {}) if hasattr(song, 'raw_data') else {}
+    source = entry.get('source', '') or getattr(song, 'source', '')
 
-    # 1. 若本身具备原生网易云数字 ID，直接秒取官方直链
-    song_id = getattr(song, 'identifier', '') or raw_search.get('songid')
-    if song_id and str(song_id).isdigit():
-        url = resolve_netease_direct_url(song_id)
-        if url:
-            song.download_url = url
-            return url
-
-    # 2. 网易云跨平台对齐（高品质正版全曲直链，绝无下架播报提示音假音频）
-    url = resolve_by_netease_search(song.song_name, song.singers)
-    if url:
-        song.download_url = url
-        return url
-
-    # 3. 酷我官方极速 CDN 直链（已内置 80KB 下架播报假音频拦截过滤器）
-    url = resolve_kuwo_direct_url(song.song_name, song.singers)
-    if url:
-        song.download_url = url
-        return url
-
-    # 4. QQ 音乐专属直通备用
-    if entry.get('source') == 'QQMusicClient' or 'qq' in str(entry.get('source')).lower():
+    # 1.【歌单平台绝对优先】若歌单来自 QQ 音乐，100% 直奔 QQ 音乐官方原版直通！
+    if source == 'QQMusicClient' or 'qq' in str(source).lower():
         mid = song.identifier or raw_search.get('mid') or raw_search.get('songmid')
         if mid:
             url = resolve_qq_fast_url(mid)
             if url:
                 song.download_url = url
                 return url
+
+    # 2.【歌单平台绝对优先】若歌单来自网易云音乐，100% 直奔网易云官方原版直通！
+    if source == 'NeteaseMusicClient' or '163' in str(source).lower() or 'netease' in str(source).lower():
+        song_id = getattr(song, 'identifier', '') or raw_search.get('songid')
+        if song_id and str(song_id).isdigit():
+            url = resolve_netease_direct_url(song_id)
+            if url:
+                song.download_url = url
+                return url
+
+    # 3.【歌单平台绝对优先】若歌单来自酷我音乐，直接按酷我官方解析！
+    if source == 'KuwoMusicClient' or 'kuwo' in str(source).lower():
+        song_id = getattr(song, 'identifier', '') or raw_search.get('MUSICRID') or raw_search.get('musicrid')
+        url = resolve_kuwo_direct_url(song.song_name, song.singers, song_id=song_id)
+        if url:
+            song.download_url = url
+            return url
+
+    # 4. 跨平台兜底（仅在原平台未解析出直链时）：严格同歌手正版对齐，绝不拿翻唱充数！
+    url = resolve_by_netease_search(song.song_name, song.singers)
+    if url:
+        song.download_url = url
+        return url
+
+    url = resolve_kuwo_direct_url(song.song_name, song.singers)
+    if url:
+        song.download_url = url
+        return url
+
+    # 5. QQ 音乐开放直链备用
+    mid = getattr(song, 'identifier', '') or raw_search.get('mid') or raw_search.get('songmid')
+    if mid:
+        url = resolve_qq_fast_url(mid)
+        if url:
+            song.download_url = url
+            return url
 
     return url
 
