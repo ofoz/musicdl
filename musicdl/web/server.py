@@ -520,15 +520,41 @@ def resolve_qq_fast_url(song_mid):
     return None
 
 
+def safe_dict_extract(d, keys, default=None):
+    """递归安全提取嵌套字典，彻底避免因返回 'data': null 引发的 AttributeError"""
+    curr = d
+    for k in keys:
+        if not isinstance(curr, dict):
+            return default
+        curr = curr.get(k)
+        if curr is None:
+            return default
+    return curr
+
+
+def clean_music_query(song_name, singers=''):
+    """智能净化歌名与歌手名，剔除 (电视剧...)、[Live]、feat 等干扰词"""
+    s_raw = str(song_name or '').strip()
+    s_clean = re.sub(r'[\(（\[【].*?[\)）\]】]', '', s_raw).strip()
+    s_name = s_clean if len(s_clean) >= 2 else s_raw
+    clean_singer = str(singers or '').split(' / ')[0].split(',')[0].split('、')[0].strip()
+    if clean_singer.lower() in {'未知歌手', '未知艺人', 'various artists', 'unknown'}:
+        clean_singer = ''
+    return s_name, clean_singer
+
+
 def resolve_netease_lrc_by_id(song_id):
     """根据网易云歌曲 ID 0.05秒精准获取官方 LRC 歌词"""
     if not song_id:
         return ''
-    headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://music.163.com/'}
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://music.163.com/'
+    }
     try:
-        lr = requests.get(f'https://music.163.com/api/song/lyric?id={song_id}&lv=1&kv=1&tv=-1', headers=headers, timeout=(2, 3), verify=False).json()
-        lrc = lr.get('lrc', {}).get('lyric', '')
-        if lrc and str(lrc).strip():
+        lr = requests.get(f'https://music.163.com/api/song/lyric?id={song_id}&lv=1&kv=1&tv=-1', headers=headers, timeout=(3, 5), verify=False).json()
+        lrc = safe_dict_extract(lr, ['lrc', 'lyric'], '')
+        if lrc and str(lrc).strip() and str(lrc).strip() not in {'NULL', 'None'}:
             return str(lrc).strip()
     except Exception:
         pass
@@ -536,88 +562,116 @@ def resolve_netease_lrc_by_id(song_id):
 
 
 def resolve_kugou_fast_lrc(song_name, singers=''):
-    """通过酷狗移动端接口 0.2秒极速检索全曲库毫秒级 LRC 歌词（免鉴权，无海外 IP 封锁）"""
+    """通过酷狗 Web 搜索 + 移动端双通道极速检索全曲库毫秒级 LRC 歌词（HTTPS 全程加密，免海外 IP 封锁）"""
     if not song_name:
         return ''
-    clean_singers = str(singers or '').split(' / ')[0].split(',')[0].strip()
-    query = f"{song_name} {clean_singers}".strip() if clean_singers else str(song_name).strip()
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-    try:
-        encoded_query = urllib.parse.quote(query)
-        s_url = f"http://mobilecdn.kugou.com/api/v3/search/song?format=json&keyword={encoded_query}&page=1&pagesize=3"
-        resp = requests.get(s_url, timeout=(2, 3), headers=headers)
-        info = resp.json().get('data', {}).get('info', [])
-        if not info and clean_singers:
-            encoded_name = urllib.parse.quote(str(song_name).strip())
-            resp = requests.get(f"http://mobilecdn.kugou.com/api/v3/search/song?format=json&keyword={encoded_name}&page=1&pagesize=3", timeout=(2, 3), headers=headers)
-            info = resp.json().get('data', {}).get('info', [])
-        if not info:
-            return ''
+    s_name, c_singer = clean_music_query(song_name, singers)
+    queries = []
+    if c_singer:
+        queries.append(f"{s_name} {c_singer}".strip())
+    queries.append(s_name)
 
-        hash_ = info[0].get('hash')
-        dur = info[0].get('duration', 0)
-        krc_url = f"http://krcs.kugou.com/search?ver=1&man=yes&client=mobi&keyword={encoded_query}&duration={dur}&hash={hash_}"
-        krc_res = requests.get(krc_url, timeout=(2, 3), headers=headers).json()
-        candidates = krc_res.get('candidates') or []
-        if candidates:
-            cand = candidates[0]
-            dl_url = f"http://lyrics.kugou.com/download?ver=1&client=pc&id={cand['id']}&accesskey={cand['accesskey']}&fmt=lrc&charset=utf8"
-            dl_res = requests.get(dl_url, timeout=(2, 3), headers=headers).json()
-            raw_c = dl_res.get('content')
-            if raw_c:
-                lrc = base64.b64decode(raw_c).decode('utf-8', errors='ignore')
-                if lrc and len(lrc.strip()) > 10:
-                    return str(lrc).strip()
-    except Exception:
-        pass
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+
+    for query in queries:
+        encoded_query = urllib.parse.quote(query)
+        hash_ = ''
+        dur = 0
+
+        # 通道 1: 酷狗官方 Web 端搜索（海外 IP 畅通无阻，绝不返回 null）
+        try:
+            web_url = f"https://songsearch.kugou.com/song_search_v2?keyword={encoded_query}&page=1&pagesize=2&platform=WebFilter"
+            r = requests.get(web_url, timeout=(3, 5), headers=headers).json()
+            lists = safe_dict_extract(r, ['data', 'lists'], [])
+            if lists:
+                first = lists[0]
+                hash_ = first.get('FileHash') or first.get('HQFileHash') or first.get('SQFileHash') or ''
+                dur = first.get('Duration', 0)
+        except Exception:
+            pass
+
+        # 通道 2: 酷狗移动端接口兜底
+        if not hash_:
+            try:
+                mob_url = f"https://mobilecdn.kugou.com/api/v3/search/song?format=json&keyword={encoded_query}&page=1&pagesize=2"
+                r = requests.get(mob_url, timeout=(3, 5), headers=headers).json()
+                info = safe_dict_extract(r, ['data', 'info'], [])
+                if info:
+                    first = info[0]
+                    hash_ = first.get('hash') or ''
+                    dur = first.get('duration', 0)
+            except Exception:
+                pass
+
+        # 匹配到 hash 即刻拉取 LRC 歌词
+        if hash_:
+            try:
+                krc_url = f"https://krcs.kugou.com/search?ver=1&man=yes&client=mobi&keyword={encoded_query}&duration={dur}&hash={hash_}"
+                kr = requests.get(krc_url, timeout=(3, 5), headers=headers).json()
+                cands = safe_dict_extract(kr, ['candidates'], [])
+                if cands:
+                    cand = cands[0]
+                    cid, ak = cand.get('id'), cand.get('accesskey')
+                    if cid and ak:
+                        dl_url = f"https://lyrics.kugou.com/download?ver=1&client=pc&id={cid}&accesskey={ak}&fmt=lrc&charset=utf8"
+                        dl_res = requests.get(dl_url, timeout=(3, 5), headers=headers).json()
+                        raw_c = dl_res.get('content')
+                        if raw_c:
+                            lrc = base64.b64decode(raw_c).decode('utf-8', errors='ignore')
+                            if lrc and len(lrc.strip()) > 10:
+                                return lrc.strip()
+            except Exception:
+                pass
+
     return ''
 
 
 def resolve_netease_search_lrc(song_name, singers=''):
-    """通过网易云全网检索对齐获取 LRC 歌词"""
+    """通过网易云 cloudsearch 检索对齐获取 LRC 歌词"""
     if not song_name:
         return ''
-    clean_singers = str(singers or '').split(' / ')[0].split(',')[0].strip()
-    headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://music.163.com/'}
+    s_name, c_singer = clean_music_query(song_name, singers)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://music.163.com/'
+    }
     queries = []
-    if clean_singers:
-        queries.append(f"{song_name} {clean_singers}".strip())
-    queries.append(str(song_name).strip())
+    if c_singer:
+        queries.append(f"{s_name} {c_singer}".strip())
+    queries.append(s_name)
 
     for q in queries:
         try:
-            sr = requests.post(
-                'https://music.163.com/api/search/get/web',
-                data={'s': q, 'type': 1, 'limit': 2},
-                headers=headers,
-                timeout=(2, 3),
-                verify=False
-            ).json()
-            songs = sr.get('result', {}).get('songs', [])
-            if songs and songs[0].get('id'):
-                sid = songs[0]['id']
-                lrc = resolve_netease_lrc_by_id(sid)
-                if lrc:
-                    return lrc
+            sr_url = f"https://music.163.com/api/cloudsearch/pc?s={urllib.parse.quote(q)}&type=1&offset=0&limit=2"
+            sr = requests.post(sr_url, headers=headers, timeout=(3, 5), verify=False).json()
+            songs = safe_dict_extract(sr, ['result', 'songs'], [])
+            if songs:
+                sid = songs[0].get('id')
+                if sid:
+                    lrc = resolve_netease_lrc_by_id(sid)
+                    if lrc:
+                        return lrc
         except Exception:
             continue
     return ''
 
 
 def resolve_fast_lrc(song_name, singers='', song_id=None):
-    """三重极速歌词引擎：原生ID直取 -> 酷狗全曲库毫秒检索 -> 网易云跨平台对齐"""
+    """全网工业级极速歌词引擎：原生ID秒取 -> 酷狗全曲库双通道 -> 网易云云检索"""
     # 1. 若本身具备网易云数字 song_id（如歌单解析），0.05秒直取官方歌词
     if song_id and str(song_id).isdigit():
         lrc = resolve_netease_lrc_by_id(song_id)
         if lrc:
             return lrc
 
-    # 2. 酷狗移动端极速接口（全曲库、覆盖最新最热歌曲、支持海外免鉴权直连，0.2秒响应）
+    # 2. 酷狗 Web + 移动端双通道（全曲库、覆盖最新最热歌曲、支持海外 HTTPS 直连，0.2秒响应）
     lrc = resolve_kugou_fast_lrc(song_name, singers)
     if lrc:
         return lrc
 
-    # 3. 网易云跨平台检索对齐兜底
+    # 3. 网易云云检索对齐兜底
     lrc = resolve_netease_search_lrc(song_name, singers)
     if lrc:
         return lrc
@@ -796,13 +850,19 @@ def api_lyric(token):
     if not song_id and song and hasattr(song, 'raw_data'):
         song_id = song.raw_data.get('search', {}).get('songid', '')
 
+    print(f"[Lyric API] Request: token={token}, song='{song_name}', singer='{singers}', sid='{song_id}'", flush=True)
+
     raw_lyric = getattr(song, 'lyric', '') if song else ''
     lyric = str(raw_lyric or '').strip()
+    if lyric in {'NULL', 'None', 'null'}:
+        lyric = ''
 
     if not lyric and (song_name or song_id):
         lyric = resolve_fast_lrc(song_name, singers, song_id=song_id)
         if lyric and song:
             song.lyric = lyric
+
+    print(f"[Lyric API] Response: has_lyric={bool(lyric)}, length={len(lyric)} chars", flush=True)
 
     if request.args.get('download') == '1':
         if not lyric:

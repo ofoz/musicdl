@@ -1212,14 +1212,60 @@ async function loadLyric(token) {
       }
       parseLyric(data.lyric);
       renderLyric();
-    } else if (!state.lyrics.length) {
-      lyricContainer.innerHTML = '<div class="text-slate-400 font-medium text-sm py-20 text-center">暂未提供同步歌词</div>';
-      fsLyricContainer.innerHTML = '<div class="text-slate-400 font-medium text-base py-32 text-center">暂未提供同步歌词</div>';
+      return;
+    }
+
+    // 3. 客户端双轨直通自愈：若境外服务器接口偶发受限，国内用户浏览器直连高可用通道
+    if (track && track.identifier && /^\d+$/.test(track.identifier)) {
+      try {
+        const clientRes = await fetch(`https://api.injahow.cn/meting/?type=lrc&id=${track.identifier}`);
+        if (clientRes.ok) {
+          const clientLrc = await clientRes.text();
+          if (clientLrc && clientLrc.length > 20 && clientLrc.includes('[')) {
+            if (state.currentTrack) {
+              state.currentTrack.lyric = clientLrc;
+              state.currentTrack.has_lyric = true;
+            }
+            parseLyric(clientLrc);
+            renderLyric();
+            return;
+          }
+        }
+      } catch (e) {
+        // ignore client fallback error
+      }
+    }
+
+    if (!state.lyrics.length) {
+      const retryBtn = `<button type="button" class="ml-2 text-emerald-400 hover:text-emerald-300 underline font-medium cursor-pointer" onclick="loadLyric('${token}')">点击重试</button>`;
+      lyricContainer.innerHTML = `<div class="text-slate-400 font-medium text-sm py-20 text-center">暂未提供同步歌词 ${retryBtn}</div>`;
+      fsLyricContainer.innerHTML = `<div class="text-slate-400 font-medium text-base py-32 text-center">暂未提供同步歌词 ${retryBtn}</div>`;
     }
   } catch (err) {
+    // 若请求发生网络故障，也尝试客户端直连兜底
+    if (track && track.identifier && /^\d+$/.test(track.identifier)) {
+      try {
+        const clientRes = await fetch(`https://api.injahow.cn/meting/?type=lrc&id=${track.identifier}`);
+        if (clientRes.ok) {
+          const clientLrc = await clientRes.text();
+          if (clientLrc && clientLrc.length > 20 && clientLrc.includes('[')) {
+            if (state.currentTrack) {
+              state.currentTrack.lyric = clientLrc;
+              state.currentTrack.has_lyric = true;
+            }
+            parseLyric(clientLrc);
+            renderLyric();
+            return;
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
     if (!state.lyrics.length) {
-      lyricContainer.innerHTML = '<div class="text-rose-400 text-sm py-20 text-center">获取歌词失败</div>';
-      fsLyricContainer.innerHTML = '<div class="text-rose-400 text-base py-32 text-center">获取歌词失败</div>';
+      const retryBtn = `<button type="button" class="ml-2 text-emerald-400 hover:text-emerald-300 underline font-medium cursor-pointer" onclick="loadLyric('${token}')">点击重试</button>`;
+      lyricContainer.innerHTML = `<div class="text-rose-400 text-sm py-20 text-center">获取歌词失败 ${retryBtn}</div>`;
+      fsLyricContainer.innerHTML = `<div class="text-rose-400 text-base py-32 text-center">获取歌词失败 ${retryBtn}</div>`;
     }
   }
 }
