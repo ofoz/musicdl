@@ -28,7 +28,7 @@ requests.packages.urllib3.disable_warnings()
 # Directories
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(HERE, 'static')
-DOWNLOAD_DIR = os.path.join(os.getcwd(), 'musicdl_web_downloads')
+DOWNLOAD_DIR = os.environ.get('MUSICDL_DOWNLOAD_DIR', os.path.join(os.getcwd(), 'musicdl_web_downloads'))
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 # Sources definition with categories
@@ -766,7 +766,12 @@ def api_track_resolve():
     return jsonify({'error': f'未检索到可用的音源直链: {song_name}'}), 404
 
 
-def run_server(host='127.0.0.1', port=5050):
+def run_server(host='127.0.0.1', port=5050, work_dir=None):
+    global DOWNLOAD_DIR, REGISTRY_CACHE_FILE
+    if work_dir:
+        DOWNLOAD_DIR = os.path.abspath(work_dir)
+        os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+        REGISTRY_CACHE_FILE = os.path.join(DOWNLOAD_DIR, '.track_registry.json')
     app.run(host=host, port=port, threaded=True, debug=False)
 
 
