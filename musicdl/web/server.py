@@ -183,13 +183,21 @@ DL_LOCK = threading.Lock()
 
 
 def track_to_payload(song_info: SongInfo, token: str, source: str) -> dict:
-    ext = str(getattr(song_info, 'ext', 'mp3') or 'mp3').lower().lstrip('.')
+    raw_ext = getattr(song_info, 'ext', None)
+    if not raw_ext or str(raw_ext).lower().strip() in {'none', 'null', ''}:
+        ext = 'mp3'
+    else:
+        ext = str(raw_ext).lower().strip().lstrip('.')
+        if ext in {'none', 'null', ''}:
+            ext = 'mp3'
+
     source_meta = SUPPORTED_SOURCES.get(source, {})
     raw_lyric = getattr(song_info, 'lyric', None)
     lyric_str = str(raw_lyric).strip() if raw_lyric else ''
     is_mainstream = source in {'NeteaseMusicClient', 'QQMusicClient', 'KuwoMusicClient', 'KugouMusicClient', 'MiguMusicClient'}
     has_lyric = bool(lyric_str) or is_mainstream
     is_lossless = ext in {'flac', 'wav', 'ape', 'alac', 'dsf', 'dff'} or is_mainstream
+    display_ext = 'flac' if is_mainstream and ext == 'mp3' else ext
     return {
         'token': token,
         'source': source,
@@ -200,7 +208,7 @@ def track_to_payload(song_info: SongInfo, token: str, source: str) -> dict:
         'album': str(getattr(song_info, 'album', '') or ''),
         'duration': str(getattr(song_info, 'duration', '') or '00:00'),
         'file_size': str(getattr(song_info, 'file_size', '') or ''),
-        'ext': 'flac' if is_mainstream and ext == 'mp3' else ext,
+        'ext': display_ext,
         'lossless': is_lossless,
         'identifier': str(getattr(song_info, 'identifier', '') or ''),
         'cover_url': f'/api/cover/{token}' if getattr(song_info, 'cover_url', None) else '',
@@ -452,6 +460,15 @@ def try_embed_metadata(raw_bytes: bytes, ext: str, song: SongInfo) -> bytes:
 
 
 def make_content_disposition(filename: str, ext: str = 'mp3') -> str:
+    ext = str(ext or 'mp3').lower().strip().lstrip('.')
+    if not ext or ext in {'none', 'null'}:
+        ext = 'mp3'
+    # 彻底清除可能传入的 .none 后缀并确保后缀正确
+    if filename.lower().endswith('.none'):
+        filename = filename[:-5]
+    if not filename.lower().endswith(f".{ext}"):
+        filename = f"{filename}.{ext}"
+
     # 提取纯 ASCII 字符作为老旧客户端兜底名，严禁包含任何非 ASCII 或 Latin-1 范围外的字符
     ascii_clean = re.sub(r'[^a-zA-Z0-9_\.\-]', '_', filename)
     ascii_clean = re.sub(r'_+', '_', ascii_clean).strip('._- ')
@@ -953,7 +970,21 @@ def api_stream(token):
     # 在线试听：直接 302 重定向至 CDN，让浏览器原生硬解流式播放，彻底免除反代二次中转缓冲、避免 WSGI chunked 协议冲突与海外地域封锁！
     if not is_download and not embed_lyric and target_format in {'', 'original'}:
         return redirect(url, code=302)
-    orig_ext = (str(getattr(song, 'ext', 'mp3')) or 'mp3').lstrip('.').lower()
+
+    orig_ext = str(getattr(song, 'ext', '') or '').lstrip('.').lower()
+    if not orig_ext or orig_ext in {'none', 'null'}:
+        clean_url = url.split('?')[0].lower()
+        if clean_url.endswith('.flac'):
+            orig_ext = 'flac'
+        elif clean_url.endswith('.m4a') or clean_url.endswith('.aac'):
+            orig_ext = 'm4a'
+        elif clean_url.endswith('.wav'):
+            orig_ext = 'wav'
+        elif clean_url.endswith('.ogg'):
+            orig_ext = 'ogg'
+        else:
+            orig_ext = 'mp3'
+    song.ext = orig_ext
 
     # 规范化 upstream_headers，根据真实直链域名配置，坚决避免跨平台 referer 引发 CDN 403 Forbidden
     upstream_headers = {

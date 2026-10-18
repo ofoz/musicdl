@@ -283,7 +283,8 @@ function openFormatModal(track, forSettingsOnly = false) {
 
   if (track) {
     modalTrackName.innerText = `${track.song_name} - ${track.singers}`;
-    modalOrigExtBadge.innerText = (track.ext || 'flac').toUpperCase();
+    const cleanExt = (track.ext && track.ext.toLowerCase() !== 'none' && track.ext.toLowerCase() !== 'null') ? track.ext.toUpperCase() : 'MP3';
+    modalOrigExtBadge.innerText = cleanExt;
   } else {
     modalTrackName.innerText = '设置默认下载格式与歌词偏好';
     modalOrigExtBadge.innerText = 'ORIGINAL';
@@ -477,7 +478,10 @@ function executeDownload(track, format, includeLrc = true, embedLyric = true) {
   const willDownloadLrc = includeLrc && hasLyric;
 
   // 1. 发起音频下载 (顶层 <a> 手势直下，兼容 PC 与移动端，绝不打断当前播放)
-  const targetExt = (format === 'original' ? (track.ext || 'mp3') : format).toLowerCase().replace(/^\./, '');
+  let targetExt = (format === 'original' ? (track.ext || 'mp3') : format).toLowerCase().replace(/^\./, '');
+  if (!targetExt || targetExt === 'none' || targetExt === 'null') {
+    targetExt = 'mp3';
+  }
   const audioFilename = `${track.song_name} - ${track.singers}.${targetExt}`;
   let audioUrl = `/api/stream/${track.token}?download=1&format=${encodeURIComponent(format)}`;
   if (willEmbed) audioUrl += '&embed_lyric=1';
@@ -623,9 +627,10 @@ function appendTrackRow(track, index) {
   tr.className = 'track-row cursor-pointer';
   tr.dataset.index = index;
 
+  const cleanBadgeExt = (track.ext && track.ext.toLowerCase() !== 'none' && track.ext.toLowerCase() !== 'null') ? track.ext.toUpperCase() : 'MP3';
   const qualityBadge = track.lossless
     ? '<span class="px-1.5 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-bold shadow-xs">无损</span>'
-    : `<span class="px-1.5 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-500 text-[10px]">${track.ext.toUpperCase()}</span>`;
+    : `<span class="px-1.5 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-500 text-[10px]">${cleanBadgeExt}</span>`;
 
   const lyricBadge = track.has_lyric
     ? '<span class="px-1.5 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-semibold flex items-center gap-1 shadow-xs" title="含同步LRC歌词"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>词</span>'
@@ -742,8 +747,8 @@ function playTrack(index, autoOpenPlayer = true) {
     fsBgBlur.style.backgroundImage = 'none';
   }
   fsSourceBadge.innerText = track.source_label || '主流音源';
-  const extName = (track.ext || 'flac').toUpperCase();
-  fsExtBadge.innerText = `${extName} 高保真`;
+  const cleanExtName = (track.ext && track.ext.toLowerCase() !== 'none' && track.ext.toLowerCase() !== 'null') ? track.ext.toUpperCase() : 'HQ';
+  fsExtBadge.innerText = `${cleanExtName} 高保真`;
 
   // 4. Set audio stream and start playing
   state.predictedNextIndex = -1;
