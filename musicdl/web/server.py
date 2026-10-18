@@ -182,22 +182,103 @@ DOWNLOADS = {}
 DL_LOCK = threading.Lock()
 
 
-def track_to_payload(song_info: SongInfo, token: str, source: str) -> dict:
+def detect_real_quality(song_info: SongInfo, source: str) -> dict:
+    """按第一性原理与客观源站事实探测真实品质，绝不虚构无损"""
+    # 1. 优先检查已经确定的真实 download_url 或真实 ext
     raw_ext = getattr(song_info, 'ext', None)
-    if not raw_ext or str(raw_ext).lower().strip() in {'none', 'null', ''}:
-        ext = 'mp3'
-    else:
-        ext = str(raw_ext).lower().strip().lstrip('.')
-        if ext in {'none', 'null', ''}:
+    ext = str(raw_ext).lower().strip().lstrip('.') if raw_ext else ''
+    if ext in {'none', 'null'}:
+        ext = ''
+
+    # 从已有直链嗅探实际格式
+    download_url = getattr(song_info, 'download_url', '') or ''
+    if download_url and isinstance(download_url, str) and download_url.startswith('http'):
+        clean_u = download_url.split('?')[0].lower()
+        if clean_u.endswith('.flac'):
+            ext = 'flac'
+        elif clean_u.endswith('.m4a') or clean_u.endswith('.aac'):
+            ext = 'm4a'
+        elif clean_u.endswith('.wav'):
+            ext = 'wav'
+        elif clean_u.endswith('.ogg'):
+            ext = 'ogg'
+        elif clean_u.endswith('.mp3'):
             ext = 'mp3'
 
+    # 若已有明确真实 ext
+    if ext:
+        if ext in {'flac', 'wav', 'ape', 'alac', 'dsf', 'dff'}:
+            return {'ext': ext, 'lossless': True, 'quality_type': 'lossless', 'quality_label': '无损'}
+        elif ext in {'m4a', 'aac'}:
+            return {'ext': ext, 'lossless': False, 'quality_type': 'hq', 'quality_label': 'HQ'}
+        elif ext == 'mp3':
+            bitrate = getattr(song_info, 'bitrate', 0) or 0
+            if bitrate >= 320000 or bitrate == 320:
+                return {'ext': 'mp3', 'lossless': False, 'quality_type': 'hq', 'quality_label': '320K'}
+            return {'ext': 'mp3', 'lossless': False, 'quality_type': 'standard', 'quality_label': 'MP3'}
+        else:
+            return {'ext': ext, 'lossless': False, 'quality_type': 'standard', 'quality_label': ext.upper()}
+
+    # 2. 若尚未嗅探直链（歌单极速导入模式），深入检索源站元数据中的客观指标
+    search_data = getattr(song_info, 'raw_data', {}).get('search', {}) if hasattr(song_info, 'raw_data') else {}
+    if not isinstance(search_data, dict):
+        search_data = {}
+
+    # (A) 网易云源站客观事实判断
+    if source == 'NeteaseMusicClient' or '163' in str(source).lower():
+        if search_data.get('sq') or search_data.get('hr'):
+            return {'ext': 'flac', 'lossless': True, 'quality_type': 'lossless', 'quality_label': '无损'}
+        if search_data.get('h'):
+            return {'ext': 'mp3', 'lossless': False, 'quality_type': 'hq', 'quality_label': '320K'}
+        if search_data.get('l') or search_data.get('m'):
+            return {'ext': 'mp3', 'lossless': False, 'quality_type': 'standard', 'quality_label': 'MP3'}
+
+    # (B) QQ 音乐源站客观事实判断
+    if source == 'QQMusicClient' or 'qq' in str(source).lower():
+        file_info = search_data.get('file', {})
+        if not isinstance(file_info, dict):
+            file_info = {}
+        size_flac = file_info.get('size_flac') or search_data.get('sizeflac') or 0
+        size_320 = file_info.get('size_320mp3') or search_data.get('size320') or 0
+        size_aac = file_info.get('size_192aac') or file_info.get('size_320aac') or 0
+        if size_flac and int(size_flac) > 0:
+            return {'ext': 'flac', 'lossless': True, 'quality_type': 'lossless', 'quality_label': '无损'}
+        if (size_320 and int(size_320) > 0) or (size_aac and int(size_aac) > 0):
+            return {'ext': 'm4a' if size_aac else 'mp3', 'lossless': False, 'quality_type': 'hq', 'quality_label': 'HQ'}
+        return {'ext': 'mp3', 'lossless': False, 'quality_type': 'standard', 'quality_label': 'MP3'}
+
+    # (C) 酷我音乐源站客观事实判断
+    if source == 'KuwoMusicClient' or 'kuwo' in str(source).lower():
+        has_lossless = search_data.get('hasLossless') or search_data.get('haslossless')
+        if has_lossless and str(has_lossless) in {'1', 'true', 'True'}:
+            return {'ext': 'flac', 'lossless': True, 'quality_type': 'lossless', 'quality_label': '无损'}
+        return {'ext': 'mp3', 'lossless': False, 'quality_type': 'standard', 'quality_label': 'MP3'}
+
+    # (D) 酷狗音乐源站客观事实判断
+    if source == 'KugouMusicClient' or 'kugou' in str(source).lower():
+        sq_hash = search_data.get('sqhash') or search_data.get('SQFileHash')
+        if sq_hash:
+            return {'ext': 'flac', 'lossless': True, 'quality_type': 'lossless', 'quality_label': '无损'}
+        hq_hash = search_data.get('hqhash') or search_data.get('HQFileHash')
+        if hq_hash:
+            return {'ext': 'mp3', 'lossless': False, 'quality_type': 'hq', 'quality_label': '320K'}
+        return {'ext': 'mp3', 'lossless': False, 'quality_type': 'standard', 'quality_label': 'MP3'}
+
+    # (E) 兜底：未探测或无元数据，诚实展示为标准 MP3，绝不无脑设为无损！
+    return {'ext': 'mp3', 'lossless': False, 'quality_type': 'standard', 'quality_label': 'MP3'}
+
+
+def track_to_payload(song_info: SongInfo, token: str, source: str) -> dict:
     source_meta = SUPPORTED_SOURCES.get(source, {})
+    q = detect_real_quality(song_info, source)
+
     raw_lyric = getattr(song_info, 'lyric', None)
     lyric_str = str(raw_lyric).strip() if raw_lyric else ''
-    is_mainstream = source in {'NeteaseMusicClient', 'QQMusicClient', 'KuwoMusicClient', 'KugouMusicClient', 'MiguMusicClient'}
-    has_lyric = bool(lyric_str) or is_mainstream
-    is_lossless = ext in {'flac', 'wav', 'ape', 'alac', 'dsf', 'dff'} or is_mainstream
-    display_ext = 'flac' if is_mainstream and ext == 'mp3' else ext
+    if lyric_str in {'NULL', 'None', 'null'}:
+        lyric_str = ''
+    # 真实判定：歌词必须是非空有效文本，严禁任何假冒
+    has_lyric = bool(lyric_str and len(lyric_str) > 10 and ('[' in lyric_str or '\n' in lyric_str))
+
     return {
         'token': token,
         'source': source,
@@ -208,8 +289,10 @@ def track_to_payload(song_info: SongInfo, token: str, source: str) -> dict:
         'album': str(getattr(song_info, 'album', '') or ''),
         'duration': str(getattr(song_info, 'duration', '') or '00:00'),
         'file_size': str(getattr(song_info, 'file_size', '') or ''),
-        'ext': display_ext,
-        'lossless': is_lossless,
+        'ext': q['ext'],
+        'lossless': q['lossless'],
+        'quality_type': q['quality_type'],
+        'quality_label': q['quality_label'],
         'identifier': str(getattr(song_info, 'identifier', '') or ''),
         'cover_url': f'/api/cover/{token}' if getattr(song_info, 'cover_url', None) else '',
         'has_lyric': has_lyric,
@@ -967,10 +1050,6 @@ def api_stream(token):
     embed_lyric = request.args.get('embed_lyric') == '1'
     target_format = (request.args.get('format') or 'original').lower().strip().lstrip('.')
 
-    # 在线试听：直接 302 重定向至 CDN，让浏览器原生硬解流式播放，彻底免除反代二次中转缓冲、避免 WSGI chunked 协议冲突与海外地域封锁！
-    if not is_download and not embed_lyric and target_format in {'', 'original'}:
-        return redirect(url, code=302)
-
     orig_ext = str(getattr(song, 'ext', '') or '').lstrip('.').lower()
     if not orig_ext or orig_ext in {'none', 'null'}:
         clean_url = url.split('?')[0].lower()
@@ -985,6 +1064,11 @@ def api_stream(token):
         else:
             orig_ext = 'mp3'
     song.ext = orig_ext
+    REGISTRY._save_cache()
+
+    # 在线试听：直接 302 重定向至 CDN，让浏览器原生硬解流式播放，彻底免除反代二次中转缓冲、避免 WSGI chunked 协议冲突与海外地域封锁！
+    if not is_download and not embed_lyric and target_format in {'', 'original'}:
+        return redirect(url, code=302)
 
     # 规范化 upstream_headers，根据真实直链域名配置，坚决避免跨平台 referer 引发 CDN 403 Forbidden
     upstream_headers = {
@@ -1117,6 +1201,7 @@ def api_lyric(token):
         lyric = resolve_fast_lrc(song_name, singers, song_id=song_id, source=source)
         if lyric and song:
             song.lyric = lyric
+            REGISTRY._save_cache()
 
     print(f"[Lyric API] Response: has_lyric={bool(lyric)}, length={len(lyric)} chars", flush=True)
 
@@ -1133,6 +1218,16 @@ def api_lyric(token):
         return Response(lyric.encode('utf-8'), status=200, headers=headers)
 
     return jsonify({'lyric': lyric, 'has_lyric': bool(lyric)})
+
+
+@app.route('/api/track/info/<token>')
+def api_track_info(token):
+    entry = REGISTRY.get(token)
+    if not entry:
+        return jsonify({'error': 'Track not found'}), 404
+    song = entry['song_info']
+    source = entry.get('source', '')
+    return jsonify(track_to_payload(song, token, source))
 
 
 def extract_playlist_title(client, song_infos, url):
@@ -1228,17 +1323,22 @@ def fast_parse_netease_playlist(url):
             album = t.get('al', {}).get('name') or ''
             cover_url = t.get('al', {}).get('picUrl') or ''
             song_id_str = str(t.get('id') or '')
+            dt_ms = int(t.get('dt') or 0)
+            duration_s = dt_ms // 1000
+            duration = f"{duration_s // 60:02d}:{duration_s % 60:02d}"
+            t_search = dict(t)
+            t_search.update({
+                'songid': song_id_str,
+                'songname': song_name,
+                'singers': singers,
+                'album': album,
+                'cover_url': cover_url,
+                'duration': duration,
+            })
             song_info = SongInfo(
                 source='NeteaseMusicClient',
                 raw_data={
-                    'search': {
-                        'songid': song_id_str,
-                        'songname': song_name,
-                        'singers': singers,
-                        'album': album,
-                        'cover_url': cover_url,
-                        'duration': duration,
-                    },
+                    'search': t_search,
                     'download': {},
                     'lyric': {}
                 }

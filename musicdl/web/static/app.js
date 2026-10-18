@@ -622,19 +622,80 @@ function updateSourceChips(stats) {
   if (sourceChips) sourceChips.innerHTML = '';
 }
 
+function getQualityBadgeHtml(track) {
+  if (track.lossless) {
+    return '<span class="px-1.5 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-bold shadow-xs" title="源站无损音质 (FLAC)">无损</span>';
+  }
+  const isHq = track.quality_type === 'hq' || (track.ext && ['m4a', 'aac'].includes(track.ext.toLowerCase())) || track.quality_label === 'HQ 320K' || track.quality_label === 'HQ' || track.quality_label === '320K';
+  if (isHq) {
+    const label = track.quality_label || 'HQ';
+    return `<span class="px-1.5 py-0.5 rounded-md bg-sky-50 border border-sky-200 text-sky-700 text-[10px] font-semibold shadow-xs" title="超高保真品质 (320kbps / AAC)">${escapeHtml(label)}</span>`;
+  }
+  const cleanBadgeExt = (track.ext && track.ext.toLowerCase() !== 'none' && track.ext.toLowerCase() !== 'null') ? track.ext.toUpperCase() : 'MP3';
+  return `<span class="px-1.5 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-500 text-[10px]" title="标准音质">${escapeHtml(cleanBadgeExt)}</span>`;
+}
+
+function getLyricBadgeHtml(hasLyric) {
+  if (hasLyric) {
+    return '<span class="px-1.5 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-semibold flex items-center gap-1 shadow-xs" title="含同步LRC歌词"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>词</span>';
+  }
+  return '<span class="px-1.5 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-400 text-[10px]" title="暂无同步歌词">无词</span>';
+}
+
+function getMobileQualityBadgeHtml(track) {
+  if (track.lossless) {
+    return '<span class="text-[9px] px-1 rounded bg-amber-50 text-amber-700 border border-amber-200 font-bold">无损</span>';
+  }
+  const isHq = track.quality_type === 'hq' || (track.ext && ['m4a', 'aac'].includes(track.ext.toLowerCase())) || track.quality_label === 'HQ 320K' || track.quality_label === 'HQ' || track.quality_label === '320K';
+  if (isHq) {
+    return `<span class="text-[9px] px-1 rounded bg-sky-50 text-sky-700 border border-sky-200 font-medium">${escapeHtml(track.quality_label || 'HQ')}</span>`;
+  }
+  const cleanExt = (track.ext && track.ext.toLowerCase() !== 'none' && track.ext.toLowerCase() !== 'null') ? track.ext.toUpperCase() : 'MP3';
+  return `<span class="text-[9px] px-1 rounded bg-slate-100 text-slate-500 border border-slate-200">${escapeHtml(cleanExt)}</span>`;
+}
+
+function getMobileLyricBadgeHtml(hasLyric) {
+  if (hasLyric) {
+    return '<span class="text-[9px] px-1 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium">词</span>';
+  }
+  return '<span class="text-[9px] px-1 rounded bg-slate-100 text-slate-400 border border-slate-200">无词</span>';
+}
+
+function updateTrackRowBadges(token, updatedData) {
+  const index = state.tracks.findIndex(t => t.token === token);
+  if (index === -1) return;
+  const track = state.tracks[index];
+  Object.assign(track, updatedData);
+
+  const row = document.querySelector(`.track-row[data-index="${index}"]`);
+  if (!row) return;
+
+  const qualitySpan = row.querySelector('.track-quality-badge');
+  if (qualitySpan) qualitySpan.innerHTML = getQualityBadgeHtml(track);
+
+  const lyricSpan = row.querySelector('.track-lyric-badge');
+  if (lyricSpan) lyricSpan.innerHTML = getLyricBadgeHtml(track.has_lyric);
+
+  const mobileQ = row.querySelector('.mobile-quality-badge');
+  if (mobileQ) mobileQ.innerHTML = getMobileQualityBadgeHtml(track);
+
+  const mobileL = row.querySelector('.mobile-lyric-badge');
+  if (mobileL) mobileL.innerHTML = getMobileLyricBadgeHtml(track.has_lyric);
+
+  if (state.currentTrack && state.currentTrack.token === token) {
+    const cleanExtName = (track.ext && track.ext.toLowerCase() !== 'none' && track.ext.toLowerCase() !== 'null') ? track.ext.toUpperCase() : 'HQ';
+    const qualityDesc = track.lossless ? '无损原声' : (track.quality_type === 'hq' ? '超高品质' : '标准品质');
+    fsExtBadge.innerText = `${cleanExtName} · ${qualityDesc}`;
+  }
+}
+
 function appendTrackRow(track, index) {
   const tr = document.createElement('tr');
   tr.className = 'track-row cursor-pointer';
   tr.dataset.index = index;
 
-  const cleanBadgeExt = (track.ext && track.ext.toLowerCase() !== 'none' && track.ext.toLowerCase() !== 'null') ? track.ext.toUpperCase() : 'MP3';
-  const qualityBadge = track.lossless
-    ? '<span class="px-1.5 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-bold shadow-xs">无损</span>'
-    : `<span class="px-1.5 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-500 text-[10px]">${cleanBadgeExt}</span>`;
-
-  const lyricBadge = track.has_lyric
-    ? '<span class="px-1.5 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-semibold flex items-center gap-1 shadow-xs" title="含同步LRC歌词"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>词</span>'
-    : '<span class="px-1.5 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-400 text-[10px]" title="暂无同步歌词">无词</span>';
+  const qualityBadge = `<span class="track-quality-badge inline-flex items-center">${getQualityBadgeHtml(track)}</span>`;
+  const lyricBadge = `<span class="track-lyric-badge inline-flex items-center">${getLyricBadgeHtml(track.has_lyric)}</span>`;
 
   tr.innerHTML = `
     <td class="py-2.5 sm:py-3 px-2 sm:px-3 text-center text-slate-400 text-[11px] sm:text-xs font-mono whitespace-nowrap">${index + 1}</td>
@@ -644,8 +705,8 @@ function appendTrackRow(track, index) {
         <div class="text-[11px] text-slate-500 sm:hidden flex flex-wrap items-center gap-1.5 mt-0.5">
           <span class="truncate max-w-[140px]">${escapeHtml(track.singers)}</span>
           <span class="text-[10px] px-1 py-0.2 rounded bg-emerald-50/90 text-emerald-800 border border-emerald-200/60 font-mono">${track.source_short}</span>
-          ${track.lossless ? '<span class="text-[9px] px-1 rounded bg-amber-50 text-amber-700 border border-amber-200 font-bold">无损</span>' : ''}
-          ${track.has_lyric ? '<span class="text-[9px] px-1 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium">词</span>' : ''}
+          <span class="mobile-quality-badge inline-flex items-center">${getMobileQualityBadgeHtml(track)}</span>
+          <span class="mobile-lyric-badge inline-flex items-center">${getMobileLyricBadgeHtml(track.has_lyric)}</span>
         </div>
       </div>
     </td>
@@ -748,7 +809,8 @@ function playTrack(index, autoOpenPlayer = true) {
   }
   fsSourceBadge.innerText = track.source_label || '主流音源';
   const cleanExtName = (track.ext && track.ext.toLowerCase() !== 'none' && track.ext.toLowerCase() !== 'null') ? track.ext.toUpperCase() : 'HQ';
-  fsExtBadge.innerText = `${cleanExtName} 高保真`;
+  const qualityDesc = track.lossless ? '无损原声' : (track.quality_type === 'hq' ? '超高品质' : '标准品质');
+  fsExtBadge.innerText = `${cleanExtName} · ${qualityDesc}`;
 
   // 4. Set audio stream and start playing
   state.predictedNextIndex = -1;
@@ -763,6 +825,13 @@ function playTrack(index, autoOpenPlayer = true) {
 
   // 5. Fetch lyrics
   loadLyric(track.token);
+
+  // 异步获取流媒体解析后的实时真实音质元数据并动态刷新列表
+  fetch(`/api/track/info/${track.token}`).then(r => r.json()).then(latest => {
+    if (latest && !latest.error) {
+      updateTrackRowBadges(track.token, latest);
+    }
+  }).catch(() => {});
 
   // 6. 核心需求：播放时自动进入播放器
   if (autoOpenPlayer) {
@@ -1216,6 +1285,7 @@ async function loadLyric(token) {
         state.currentTrack.lyric = data.lyric;
         state.currentTrack.has_lyric = true;
       }
+      updateTrackRowBadges(token, { lyric: data.lyric, has_lyric: true });
       parseLyric(data.lyric);
       renderLyric();
       return;
@@ -1232,6 +1302,7 @@ async function loadLyric(token) {
               state.currentTrack.lyric = clientLrc;
               state.currentTrack.has_lyric = true;
             }
+            updateTrackRowBadges(token, { lyric: clientLrc, has_lyric: true });
             parseLyric(clientLrc);
             renderLyric();
             return;
@@ -1243,6 +1314,10 @@ async function loadLyric(token) {
     }
 
     if (!state.lyrics.length) {
+      if (state.currentTrack && state.currentTrack.token === token) {
+        state.currentTrack.has_lyric = false;
+      }
+      updateTrackRowBadges(token, { has_lyric: false });
       const retryBtn = `<button type="button" class="ml-2 text-emerald-400 hover:text-emerald-300 underline font-medium cursor-pointer" onclick="loadLyric('${token}')">点击重试</button>`;
       lyricContainer.innerHTML = `<div class="text-slate-400 font-medium text-sm py-20 text-center">暂未提供同步歌词 ${retryBtn}</div>`;
       fsLyricContainer.innerHTML = `<div class="text-slate-400 font-medium text-base py-32 text-center">暂未提供同步歌词 ${retryBtn}</div>`;
@@ -1259,6 +1334,7 @@ async function loadLyric(token) {
               state.currentTrack.lyric = clientLrc;
               state.currentTrack.has_lyric = true;
             }
+            updateTrackRowBadges(token, { lyric: clientLrc, has_lyric: true });
             parseLyric(clientLrc);
             renderLyric();
             return;
@@ -1269,6 +1345,10 @@ async function loadLyric(token) {
       }
     }
     if (!state.lyrics.length) {
+      if (state.currentTrack && state.currentTrack.token === token) {
+        state.currentTrack.has_lyric = false;
+      }
+      updateTrackRowBadges(token, { has_lyric: false });
       const retryBtn = `<button type="button" class="ml-2 text-emerald-400 hover:text-emerald-300 underline font-medium cursor-pointer" onclick="loadLyric('${token}')">点击重试</button>`;
       lyricContainer.innerHTML = `<div class="text-rose-400 text-sm py-20 text-center">获取歌词失败 ${retryBtn}</div>`;
       fsLyricContainer.innerHTML = `<div class="text-rose-400 text-base py-32 text-center">获取歌词失败 ${retryBtn}</div>`;
