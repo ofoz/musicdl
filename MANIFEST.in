@@ -1,1 +1,2 @@
 recursive-include musicdl/modules/wvds *.wvd
+recursive-include musicdl/web/static *

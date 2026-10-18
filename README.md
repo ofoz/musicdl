@@ -56,7 +56,14 @@
   ⚠️ For learning and testing only: please respect copyright and the terms of each music platform.
 </em>
 </p>
+<div align="center">
+<p>
+<strong>🌐 Modern WebUI (现代化本地工作台)</strong><br />
+<code>musicdl-web</code> or <code>python -m musicdl.web</code><br />
+<em>支持多源并发流式搜索 (SSE)、在线即点即播 (HTTP Range 代理)、实时 LRC 同步滚动歌词与批量歌单解析。</em>
+</p>
 </div>
+
 
 <p align="center">
   <strong>学习收获更多有趣的内容, 欢迎关注微信公众号：Charles的皮卡丘</strong>

@@ -132,6 +132,7 @@ class BaseMusicClient():
         raise NotImplementedError('not to be implemented')
     '''_constructuniqueworkdir'''
     def _constructuniqueworkdir(self, keyword: str, sort_by_search_kwd_and_time: bool = True) -> str:
+        self.cur_playlist_name = keyword
         time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         IOUtils.touchdir((work_dir := sanitize_filepath(os.path.join(self.work_dir, self.source, f'{time_stamp} {keyword}') if sort_by_search_kwd_and_time else os.path.join(self.work_dir, self.source))))
         return work_dir

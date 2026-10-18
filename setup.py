@@ -37,8 +37,13 @@ setup(
     license_files=("LICENSE",),
     include_package_data=True,
     packages=find_packages(),
-    package_data={"musicdl": ["modules/wvds/*.wvd",]},
-    entry_points={'console_scripts': ['musicdl = musicdl.musicdl:MusicClientCMD']},
+    package_data={"musicdl": ["modules/wvds/*.wvd", "web/static/*", "web/static/**/*"]},
+    entry_points={
+        'console_scripts': [
+            'musicdl = musicdl.musicdl:MusicClientCMD',
+            'musicdl-web = musicdl.web:main',
+        ]
+    },
     install_requires=[lab.strip('\n') for lab in list(open('requirements.txt', 'r').readlines()) if lab.strip('\n')],
     zip_safe=True,
 )

@@ -102,3 +102,8 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+
+# Local downloads and temporary outputs
+musicdl_outputs/
+musicdl_web_downloads/
+*.track_registry.json
