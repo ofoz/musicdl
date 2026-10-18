@@ -432,10 +432,15 @@ async function downloadLrcFile(track) {
     // 优先读取 track 对象中已有的歌词文本，避免二次网络请求导致手势状态失效
     let lyric = (track.lyric || '').trim();
     if (!lyric) {
-      const res = await fetch(`/api/lyric/${track.token}`);
+      const p = new URLSearchParams();
+      if (track.song_name) p.append('song_name', track.song_name);
+      if (track.singers) p.append('singers', track.singers);
+      if (track.identifier) p.append('song_id', track.identifier);
+      const res = await fetch(`/api/lyric/${track.token}?${p.toString()}`);
       if (res.ok) {
         const data = await res.json();
         lyric = (data.lyric || '').trim();
+        if (lyric) track.lyric = lyric;
       }
     }
     if (!lyric) return false;
@@ -1175,21 +1180,36 @@ async function loadLyric(token) {
   state.lyrics = [];
   state.currentLyricIndex = -1;
 
+  const track = state.currentTrack;
+
   // 1. 若当前曲目已带有歌词缓存，优先秒级预渲染
-  if (state.currentTrack && state.currentTrack.lyric) {
-    parseLyric(state.currentTrack.lyric);
+  if (track && track.lyric) {
+    parseLyric(track.lyric);
     renderLyric();
   } else {
-    lyricContainer.innerHTML = '<div class="text-slate-400 font-medium text-sm py-20 text-center">正在加载同步歌词...</div>';
-    fsLyricContainer.innerHTML = '<div class="text-slate-400 font-medium text-base py-32 text-center">正在加载同步歌词...</div>';
+    lyricContainer.innerHTML = '<div class="text-slate-400 font-medium text-sm py-20 text-center flex items-center justify-center gap-2"><svg class="animate-spin h-4 w-4 text-emerald-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>正在同步高品质歌词...</div>';
+    fsLyricContainer.innerHTML = '<div class="text-slate-400 font-medium text-base py-32 text-center flex items-center justify-center gap-2"><svg class="animate-spin h-5 w-5 text-emerald-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>正在同步高品质歌词...</div>';
   }
 
-  // 2. 从服务端取回或更新
+  // 2. 从服务端取回或更新（携带曲目元数据作为多重兜底，防 token 失效）
   try {
-    const res = await fetch(`/api/lyric/${token}`);
+    let url = `/api/lyric/${token}`;
+    if (track) {
+      const p = new URLSearchParams();
+      if (track.song_name) p.append('song_name', track.song_name);
+      if (track.singers) p.append('singers', track.singers);
+      if (track.identifier) p.append('song_id', track.identifier);
+      const qs = p.toString();
+      if (qs) url += `?${qs}`;
+    }
+
+    const res = await fetch(url);
     const data = await res.json();
     if (data && data.lyric) {
-      if (state.currentTrack) state.currentTrack.lyric = data.lyric;
+      if (state.currentTrack) {
+        state.currentTrack.lyric = data.lyric;
+        state.currentTrack.has_lyric = true;
+      }
       parseLyric(data.lyric);
       renderLyric();
     } else if (!state.lyrics.length) {
@@ -1205,23 +1225,39 @@ async function loadLyric(token) {
 }
 
 function parseLyric(lrcText) {
-  const lines = lrcText.split('\n');
+  if (!lrcText || typeof lrcText !== 'string') {
+    state.lyrics = [];
+    return;
+  }
+  const lines = lrcText.split(/\r?\n/);
   const result = [];
-  const timeRegex = /\[(\d{2}):(\d{2})(?:\.(\d{2,3}))?\]/g;
+  // 智能匹配形如 [00:12.34], [0:12.345], [01:23:45], [00:12] 等格式
+  const timeRegex = /\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
 
   for (let line of lines) {
     line = line.trim();
     if (!line) continue;
-    let match;
+    // 忽略元数据标签行
+    if (/^\[(ti|ar|al|by|offset|length|re|ve):/i.test(line)) {
+      continue;
+    }
+
     const times = [];
+    let match;
+    timeRegex.lastIndex = 0; // 关键：循环每次强制重置正则游标，彻底消灭漏行！
     while ((match = timeRegex.exec(line)) !== null) {
       const min = parseInt(match[1], 10);
       const sec = parseInt(match[2], 10);
-      const ms = match[3] ? parseInt(match[3].padEnd(3, '0').slice(0, 3), 10) : 0;
+      let ms = 0;
+      if (match[3]) {
+        ms = parseInt(match[3].padEnd(3, '0').slice(0, 3), 10);
+      }
       times.push(min * 60 + sec + ms / 1000);
     }
-    const text = line.replace(timeRegex, '').trim();
-    if (text) {
+
+    // 剔除时间戳后的纯文本
+    const text = line.replace(/\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]/g, '').trim();
+    if (text && times.length > 0) {
       times.forEach(t => result.push({ time: t, text }));
     }
   }

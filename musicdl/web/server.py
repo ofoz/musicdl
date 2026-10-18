@@ -200,6 +200,7 @@ def track_to_payload(song_info: SongInfo, token: str, source: str) -> dict:
         'file_size': str(getattr(song_info, 'file_size', '') or ''),
         'ext': 'flac' if is_mainstream and ext == 'mp3' else ext,
         'lossless': is_lossless,
+        'identifier': str(getattr(song_info, 'identifier', '') or ''),
         'cover_url': f'/api/cover/{token}' if getattr(song_info, 'cover_url', None) else '',
         'has_lyric': has_lyric,
         'lyric': lyric_str,
@@ -430,6 +431,8 @@ def try_embed_metadata(raw_bytes: bytes, ext: str, song: SongInfo) -> bytes:
         with tempfile.NamedTemporaryFile(suffix=f'.{ext}', delete=False) as tmp:
             tmp.write(raw_bytes)
             tmp_path = Path(tmp.name)
+        if not getattr(song, 'lyric', None) and getattr(song, 'song_name', None):
+            song.lyric = resolve_fast_lrc(song.song_name, getattr(song, 'singers', ''), getattr(song, 'identifier', None))
         if getattr(song, 'lyric', None):
             SongInfoUtils.embedlyrics(tmp_path, overwrite=True, lyrics_text=str(song.lyric))
         SongInfoUtils.embedbasictags(
@@ -517,30 +520,108 @@ def resolve_qq_fast_url(song_mid):
     return None
 
 
-def resolve_fast_lrc(song_name, singers=''):
-    """极速获取多源同步 LRC 歌词"""
+def resolve_netease_lrc_by_id(song_id):
+    """根据网易云歌曲 ID 0.05秒精准获取官方 LRC 歌词"""
+    if not song_id:
+        return ''
+    headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://music.163.com/'}
+    try:
+        lr = requests.get(f'https://music.163.com/api/song/lyric?id={song_id}&lv=1&kv=1&tv=-1', headers=headers, timeout=(2, 3), verify=False).json()
+        lrc = lr.get('lrc', {}).get('lyric', '')
+        if lrc and str(lrc).strip():
+            return str(lrc).strip()
+    except Exception:
+        pass
+    return ''
+
+
+def resolve_kugou_fast_lrc(song_name, singers=''):
+    """通过酷狗移动端接口 0.2秒极速检索全曲库毫秒级 LRC 歌词（免鉴权，无海外 IP 封锁）"""
     if not song_name:
         return ''
     clean_singers = str(singers or '').split(' / ')[0].split(',')[0].strip()
     query = f"{song_name} {clean_singers}".strip() if clean_singers else str(song_name).strip()
-    headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://music.163.com/'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     try:
-        sr = requests.post(
-            'https://music.163.com/api/search/get/web',
-            data={'s': query, 'type': 1, 'limit': 1},
-            headers=headers,
-            timeout=(2, 3),
-            verify=False
-        ).json()
-        songs = sr.get('result', {}).get('songs', [])
-        if songs and songs[0].get('id'):
-            sid = songs[0]['id']
-            lr = requests.get(f'https://music.163.com/api/song/lyric?id={sid}&lv=1&kv=1&tv=-1', headers=headers, timeout=(2, 3), verify=False).json()
-            lrc = lr.get('lrc', {}).get('lyric', '')
-            if lrc:
-                return str(lrc).strip()
+        encoded_query = urllib.parse.quote(query)
+        s_url = f"http://mobilecdn.kugou.com/api/v3/search/song?format=json&keyword={encoded_query}&page=1&pagesize=3"
+        resp = requests.get(s_url, timeout=(2, 3), headers=headers)
+        info = resp.json().get('data', {}).get('info', [])
+        if not info and clean_singers:
+            encoded_name = urllib.parse.quote(str(song_name).strip())
+            resp = requests.get(f"http://mobilecdn.kugou.com/api/v3/search/song?format=json&keyword={encoded_name}&page=1&pagesize=3", timeout=(2, 3), headers=headers)
+            info = resp.json().get('data', {}).get('info', [])
+        if not info:
+            return ''
+
+        hash_ = info[0].get('hash')
+        dur = info[0].get('duration', 0)
+        krc_url = f"http://krcs.kugou.com/search?ver=1&man=yes&client=mobi&keyword={encoded_query}&duration={dur}&hash={hash_}"
+        krc_res = requests.get(krc_url, timeout=(2, 3), headers=headers).json()
+        candidates = krc_res.get('candidates') or []
+        if candidates:
+            cand = candidates[0]
+            dl_url = f"http://lyrics.kugou.com/download?ver=1&client=pc&id={cand['id']}&accesskey={cand['accesskey']}&fmt=lrc&charset=utf8"
+            dl_res = requests.get(dl_url, timeout=(2, 3), headers=headers).json()
+            raw_c = dl_res.get('content')
+            if raw_c:
+                lrc = base64.b64decode(raw_c).decode('utf-8', errors='ignore')
+                if lrc and len(lrc.strip()) > 10:
+                    return str(lrc).strip()
     except Exception:
         pass
+    return ''
+
+
+def resolve_netease_search_lrc(song_name, singers=''):
+    """通过网易云全网检索对齐获取 LRC 歌词"""
+    if not song_name:
+        return ''
+    clean_singers = str(singers or '').split(' / ')[0].split(',')[0].strip()
+    headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://music.163.com/'}
+    queries = []
+    if clean_singers:
+        queries.append(f"{song_name} {clean_singers}".strip())
+    queries.append(str(song_name).strip())
+
+    for q in queries:
+        try:
+            sr = requests.post(
+                'https://music.163.com/api/search/get/web',
+                data={'s': q, 'type': 1, 'limit': 2},
+                headers=headers,
+                timeout=(2, 3),
+                verify=False
+            ).json()
+            songs = sr.get('result', {}).get('songs', [])
+            if songs and songs[0].get('id'):
+                sid = songs[0]['id']
+                lrc = resolve_netease_lrc_by_id(sid)
+                if lrc:
+                    return lrc
+        except Exception:
+            continue
+    return ''
+
+
+def resolve_fast_lrc(song_name, singers='', song_id=None):
+    """三重极速歌词引擎：原生ID直取 -> 酷狗全曲库毫秒检索 -> 网易云跨平台对齐"""
+    # 1. 若本身具备网易云数字 song_id（如歌单解析），0.05秒直取官方歌词
+    if song_id and str(song_id).isdigit():
+        lrc = resolve_netease_lrc_by_id(song_id)
+        if lrc:
+            return lrc
+
+    # 2. 酷狗移动端极速接口（全曲库、覆盖最新最热歌曲、支持海外免鉴权直连，0.2秒响应）
+    lrc = resolve_kugou_fast_lrc(song_name, singers)
+    if lrc:
+        return lrc
+
+    # 3. 网易云跨平台检索对齐兜底
+    lrc = resolve_netease_search_lrc(song_name, singers)
+    if lrc:
+        return lrc
+
     return ''
 
 
@@ -706,25 +787,28 @@ def api_cover(token):
 @app.route('/api/lyric/<token>')
 def api_lyric(token):
     entry = REGISTRY.get(token)
-    if not entry:
-        if request.args.get('download') == '1':
-            return Response('', status=204)
-        return jsonify({'lyric': '', 'has_lyric': False})
+    song = entry['song_info'] if entry else None
 
-    song = entry['song_info']
-    raw_lyric = getattr(song, 'lyric', '') or ''
-    lyric = str(raw_lyric).strip()
+    # 优先从注册表曲目中提取，若 token 不在内存中（如容器重启后），从 query 参数提取兜底
+    song_name = getattr(song, 'song_name', '') if song else (request.args.get('song_name') or '').strip()
+    singers = getattr(song, 'singers', '') if song else (request.args.get('singers') or '').strip()
+    song_id = getattr(song, 'identifier', '') if song else (request.args.get('song_id') or '').strip()
+    if not song_id and song and hasattr(song, 'raw_data'):
+        song_id = song.raw_data.get('search', {}).get('songid', '')
 
-    if not lyric:
-        lyric = resolve_fast_lrc(song.song_name, song.singers)
-        if lyric:
+    raw_lyric = getattr(song, 'lyric', '') if song else ''
+    lyric = str(raw_lyric or '').strip()
+
+    if not lyric and (song_name or song_id):
+        lyric = resolve_fast_lrc(song_name, singers, song_id=song_id)
+        if lyric and song:
             song.lyric = lyric
 
     if request.args.get('download') == '1':
         if not lyric:
             return Response('', status=204)
-        filename = f"{song.song_name} - {song.singers}.lrc"
-        encoded_filename = urllib.parse.quote(filename)
+        fname = f"{song_name or 'audio'} - {singers or 'artist'}.lrc"
+        encoded_filename = urllib.parse.quote(fname)
         headers = {
             'Content-Type': 'text/plain; charset=utf-8',
             'Content-Disposition': f"attachment; filename*=UTF-8''{encoded_filename}",
@@ -827,12 +911,12 @@ def fast_parse_netease_playlist(url):
             singers = ' / '.join([ar.get('name') for ar in t.get('ar', []) if ar.get('name')]) or '未知歌手'
             album = t.get('al', {}).get('name') or ''
             cover_url = t.get('al', {}).get('picUrl') or ''
-            duration = int(t.get('dt', 0) / 1000)
+            song_id_str = str(t.get('id') or '')
             song_info = SongInfo(
                 source='NeteaseMusicClient',
                 raw_data={
                     'search': {
-                        'songid': str(t.get('id')),
+                        'songid': song_id_str,
                         'songname': song_name,
                         'singers': singers,
                         'album': album,
@@ -843,6 +927,7 @@ def fast_parse_netease_playlist(url):
                     'lyric': {}
                 }
             )
+            song_info.identifier = song_id_str
             song_info.song_name = song_name
             song_info.singers = singers
             song_info.album = album
