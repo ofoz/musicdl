@@ -1199,6 +1199,7 @@ async function loadLyric(token) {
       if (track.song_name) p.append('song_name', track.song_name);
       if (track.singers) p.append('singers', track.singers);
       if (track.identifier) p.append('song_id', track.identifier);
+      if (track.source) p.append('source', track.source);
       const qs = p.toString();
       if (qs) url += `?${qs}`;
     }
@@ -1277,6 +1278,17 @@ function parseLyric(lrcText) {
   }
   const lines = lrcText.split(/\r?\n/);
   const result = [];
+  let offsetMs = 0;
+
+  // 1. 预扫描 offset 时间偏移量标签（标准毫秒偏移，彻底修复整体快慢偏差）
+  for (let line of lines) {
+    const offsetMatch = line.trim().match(/^\[offset:\s*([+-]?\d+)\]/i);
+    if (offsetMatch) {
+      offsetMs = parseInt(offsetMatch[1], 10) || 0;
+      break;
+    }
+  }
+
   // 智能匹配形如 [00:12.34], [0:12.345], [01:23:45], [00:12] 等格式
   const timeRegex = /\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
 
@@ -1298,7 +1310,9 @@ function parseLyric(lrcText) {
       if (match[3]) {
         ms = parseInt(match[3].padEnd(3, '0').slice(0, 3), 10);
       }
-      times.push(min * 60 + sec + ms / 1000);
+      // LRC 标准规范：根据 offset 偏移量毫秒级校准真实播放时间轴
+      const totalSec = min * 60 + sec + ms / 1000 + offsetMs / 1000;
+      times.push(Math.max(0, totalSec));
     }
 
     // 剔除时间戳后的纯文本

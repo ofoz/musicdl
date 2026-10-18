@@ -660,6 +660,33 @@ def resolve_by_qq_search(song_name, singers=''):
     return None
 
 
+def resolve_qq_official_lrc(song_mid):
+    """根据 QQ 音乐 songmid 0.05秒精准获取原厂官方毫秒级 LRC 歌词"""
+    if not song_mid:
+        return ''
+    headers = {'Referer': 'https://y.qq.com/', 'User-Agent': 'Mozilla/5.0'}
+    params = {
+        'songmid': str(song_mid),
+        'g_tk': '5381',
+        'loginUin': '0',
+        'hostUin': '0',
+        'format': 'json',
+        'inCharset': 'utf8',
+        'outCharset': 'utf-8',
+        'platform': 'yqq'
+    }
+    try:
+        r = requests.get('https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg', headers=headers, params=params, timeout=(3, 5)).json()
+        raw_lrc = r.get('lyric')
+        if raw_lrc:
+            lrc = base64.b64decode(raw_lrc).decode('utf-8', errors='ignore')
+            if lrc and len(lrc.strip()) > 10:
+                return lrc.strip()
+    except Exception:
+        pass
+    return ''
+
+
 def resolve_netease_lrc_by_id(song_id):
     """根据网易云歌曲 ID 0.05秒精准获取官方 LRC 歌词"""
     if not song_id:
@@ -775,20 +802,39 @@ def resolve_netease_search_lrc(song_name, singers=''):
     return ''
 
 
-def resolve_fast_lrc(song_name, singers='', song_id=None):
-    """全网工业级极速歌词引擎：原生ID秒取 -> 酷狗全曲库双通道 -> 网易云云检索"""
-    # 1. 若本身具备网易云数字 song_id（如歌单解析），0.05秒直取官方歌词
-    if song_id and str(song_id).isdigit():
-        lrc = resolve_netease_lrc_by_id(song_id)
-        if lrc:
-            return lrc
+def resolve_fast_lrc(song_name, singers='', song_id=None, source=''):
+    """全网工业级精准歌词引擎：平台原厂直出绝对优先（QQ官方/网易云官方） -> 酷狗对齐 -> 网易云云检索"""
+    # 1.【平台原厂直出绝对优先】若歌曲来自 QQ 音乐或具备 QQ mid
+    if source == 'QQMusicClient' or 'qq' in str(source).lower() or (song_id and not str(song_id).isdigit() and len(str(song_id)) >= 10):
+        mid = song_id
+        if not mid or str(mid).isdigit():
+            mid = resolve_by_qq_search(song_name, singers)
+        if mid:
+            lrc = resolve_qq_official_lrc(mid)
+            if lrc:
+                return lrc
 
-    # 2. 酷狗 Web + 移动端双通道（全曲库、覆盖最新最热歌曲、支持海外 HTTPS 直连，0.2秒响应）
+    # 2.【平台原厂直出绝对优先】若歌曲来自网易云音乐或具备数字 song_id
+    if source == 'NeteaseMusicClient' or '163' in str(source).lower() or (song_id and str(song_id).isdigit()):
+        if song_id and str(song_id).isdigit():
+            lrc = resolve_netease_lrc_by_id(song_id)
+            if lrc:
+                return lrc
+
+    # 3. 兜底尝试 QQ 音乐移动端检索对齐 mid 获取官方原厂毫秒级歌词
+    if song_name:
+        mid = resolve_by_qq_search(song_name, singers)
+        if mid:
+            lrc = resolve_qq_official_lrc(mid)
+            if lrc:
+                return lrc
+
+    # 4. 酷狗 Web + 移动端双通道兜底
     lrc = resolve_kugou_fast_lrc(song_name, singers)
     if lrc:
         return lrc
 
-    # 3. 网易云云检索对齐兜底
+    # 5. 网易云云检索对齐兜底
     lrc = resolve_netease_search_lrc(song_name, singers)
     if lrc:
         return lrc
@@ -1020,15 +1066,16 @@ def api_cover(token):
 def api_lyric(token):
     entry = REGISTRY.get(token)
     song = entry['song_info'] if entry else None
+    source = (entry.get('source') if entry else '') or (request.args.get('source') or '').strip()
 
     # 优先从注册表曲目中提取，若 token 不在内存中（如容器重启后），从 query 参数提取兜底
     song_name = getattr(song, 'song_name', '') if song else (request.args.get('song_name') or '').strip()
     singers = getattr(song, 'singers', '') if song else (request.args.get('singers') or '').strip()
     song_id = getattr(song, 'identifier', '') if song else (request.args.get('song_id') or '').strip()
     if not song_id and song and hasattr(song, 'raw_data'):
-        song_id = song.raw_data.get('search', {}).get('songid', '')
+        song_id = song.raw_data.get('search', {}).get('mid', '') or song.raw_data.get('search', {}).get('songmid', '') or song.raw_data.get('search', {}).get('songid', '')
 
-    print(f"[Lyric API] Request: token={token}, song='{song_name}', singer='{singers}', sid='{song_id}'", flush=True)
+    print(f"[Lyric API] Request: token={token}, source='{source}', song='{song_name}', singer='{singers}', sid='{song_id}'", flush=True)
 
     raw_lyric = getattr(song, 'lyric', '') if song else ''
     lyric = str(raw_lyric or '').strip()
@@ -1036,7 +1083,7 @@ def api_lyric(token):
         lyric = ''
 
     if not lyric and (song_name or song_id):
-        lyric = resolve_fast_lrc(song_name, singers, song_id=song_id)
+        lyric = resolve_fast_lrc(song_name, singers, song_id=song_id, source=source)
         if lyric and song:
             song.lyric = lyric
 
