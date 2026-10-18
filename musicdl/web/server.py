@@ -485,11 +485,11 @@ def resolve_netease_direct_url(song_id):
 
 
 def resolve_kuwo_direct_url(song_name, singers=''):
-    """通过酷我官方轻量接口0.4秒极速获取全网任意歌曲的CDN播放直链"""
+    """通过酷我官方轻量接口极速获取 CDN 直链（严格过滤 80KB 下架播报假音频）"""
     if not song_name:
         return None
-    clean_singers = str(singers or '').split(' / ')[0].split(',')[0].strip()
-    query = f"{song_name} {clean_singers}".strip() if clean_singers else str(song_name).strip()
+    s_name, c_singer = clean_music_query(song_name, singers)
+    query = f"{s_name} {c_singer}".strip() if c_singer else s_name
     try:
         url = f"http://search.kuwo.cn/r.s?client=kt&all={urllib.parse.quote(query)}&pn=0&rn=1&rformat=json&encoding=utf8"
         resp = requests.get(url, timeout=(2, 3), headers={'User-Agent': 'Mozilla/5.0'})
@@ -500,6 +500,16 @@ def resolve_kuwo_direct_url(song_name, singers=''):
             play_resp = requests.get(play_url_api, timeout=(2, 3), headers={'User-Agent': 'Mozilla/5.0'})
             res_url = play_resp.text.strip()
             if res_url.startswith('http'):
+                # 坚决过滤酷我官方下架假音频 (81629 字节提示音 "当前音乐已从酷我音乐下线")
+                if '563182854' in res_url:
+                    return None
+                try:
+                    head_resp = requests.head(res_url, timeout=2, headers={'User-Agent': 'Mozilla/5.0'})
+                    clen = int(head_resp.headers.get('Content-Length', 0) or 0)
+                    if 0 < clen < 150 * 1024:
+                        return None
+                except Exception:
+                    pass
                 return res_url
     except Exception:
         pass
@@ -679,34 +689,71 @@ def resolve_fast_lrc(song_name, singers='', song_id=None):
     return ''
 
 
+def resolve_by_netease_search(song_name, singers=''):
+    """通过网易云云搜索 0.3秒跨平台对齐获取官方高品质播放直链"""
+    if not song_name:
+        return None
+    s_name, c_singer = clean_music_query(song_name, singers)
+    queries = [f"{s_name} {c_singer}".strip()] if c_singer else []
+    queries.append(s_name)
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://music.163.com/'
+    }
+    for q in queries:
+        try:
+            sr_url = f"https://music.163.com/api/cloudsearch/pc?s={urllib.parse.quote(q)}&type=1&offset=0&limit=3"
+            r = requests.post(sr_url, headers=headers, timeout=(3, 5), verify=False).json()
+            songs = safe_dict_extract(r, ['result', 'songs'], [])
+            for s in (songs or []):
+                sid = s.get('id')
+                if sid:
+                    url = resolve_netease_direct_url(sid)
+                    if url:
+                        return url
+        except Exception:
+            continue
+    return None
+
+
 def resolve_instant_stream(song, entry):
     """0.3~0.8 秒按需即时获取直链，彻底代替慢速的 client.search() 避免反代 504 超时"""
     url = getattr(song, 'download_url', None)
     if url and str(url).startswith('http'):
         return url
 
-    # 1. 酷我官方极速 CDN 直链（全网歌曲覆盖率高，0.4s 官方极速响应，免鉴权）
+    raw_search = getattr(song, 'raw_data', {}).get('search', {}) if hasattr(song, 'raw_data') else {}
+
+    # 1. 若本身具备原生网易云数字 ID，直接秒取官方直链
+    song_id = getattr(song, 'identifier', '') or raw_search.get('songid')
+    if song_id and str(song_id).isdigit():
+        url = resolve_netease_direct_url(song_id)
+        if url:
+            song.download_url = url
+            return url
+
+    # 2. 网易云跨平台对齐（高品质正版全曲直链，绝无下架播报提示音假音频）
+    url = resolve_by_netease_search(song.song_name, song.singers)
+    if url:
+        song.download_url = url
+        return url
+
+    # 3. 酷我官方极速 CDN 直链（已内置 80KB 下架播报假音频拦截过滤器）
     url = resolve_kuwo_direct_url(song.song_name, song.singers)
+    if url:
+        song.download_url = url
+        return url
 
-    # 2. 网易云原生曲目：尝试官方直接直链
-    if not url:
-        raw_search = getattr(song, 'raw_data', {}).get('search', {}) if hasattr(song, 'raw_data') else {}
-        song_id = raw_search.get('songid')
-        if song_id:
-            url = resolve_netease_direct_url(song_id)
-
-    # 3. QQ 音乐专属直通
-    if not url and (entry.get('source') == 'QQMusicClient' or 'qq' in str(entry.get('source')).lower()):
+    # 4. QQ 音乐专属直通备用
+    if entry.get('source') == 'QQMusicClient' or 'qq' in str(entry.get('source')).lower():
         mid = song.identifier or raw_search.get('mid') or raw_search.get('songmid')
         if mid:
             url = resolve_qq_fast_url(mid)
+            if url:
+                song.download_url = url
+                return url
 
-    # 4. 网易云跨平台检索对齐备用
-    if not url:
-        url = resolve_by_netease_search(song.song_name, song.singers)
-
-    if url:
-        song.download_url = url
     return url
 
 
@@ -1131,7 +1178,7 @@ def api_track_resolve():
         return jsonify({'error': '缺少歌曲名'}), 400
 
     # 秒级极速获取可用直链，绝不调用慢速全局 search 导致网关 504 切断
-    direct_url = resolve_kuwo_direct_url(song_name, singers) or resolve_by_netease_search(song_name, singers)
+    direct_url = resolve_by_netease_search(song_name, singers) or resolve_kuwo_direct_url(song_name, singers)
     if direct_url:
         new_song = SongInfo(
             source='KuwoMusicClient' if 'kuwo' in direct_url else 'NeteaseMusicClient',
