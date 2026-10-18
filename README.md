@@ -72,6 +72,7 @@
 
 # 🎉 What's New
 
+- 2026-10-18: Integrated Modern WebUI — Zero-dependency web workbench featuring SSE streaming concurrent multi-source search, HTTP Range audio streaming proxy, mobile & desktop immersive player with synchronized scrolling lyrics, safe metadata/lyrics embedding, and batch playlist parser.
 - 2026-10-16: Released musicdl v2.14.2 — performed monthly maintenance on common music clients and fixed broken API integrations in four affected clients.
 - 2026-10-10: Released musicdl v2.14.1 — monthly maintenance of third-party music clients: fixed API issues on four platforms and replaced three discontinued ones with similar alternatives.
 - 2026-09-23: Released musicdl v2.14.0 — fix several bugs in Apple Music, and refactor parts of the third-party parsing interfaces for Qobuz, Deezer, and TIDAL Music.
@@ -308,8 +309,50 @@ Certain music clients supported by musicdl require extra CLI tools to function c
 
 # 🚀 Quick Start
 
-This guide explains the most common ways to use musicdl in both the command line and Python.
-It is written for practical, day-to-day usage, so the focus is on the workflows most users need first: searching songs, choosing music sources, downloading playlists, saving files to custom folders, and passing cookies or request settings when needed.
+This guide explains the most common ways to use musicdl in the Web UI, command line, and Python.
+
+#### (0) Run Modern WebUI (现代化本地工作台 · 推荐)
+
+musicdl 内置了轻量级、零外部框架依赖的现代化本地 WebUI 音乐工作台，提供开箱即用的跨端搜索、在线试听、沉浸式歌词滚动与智能下载管理：
+
+```bash
+# 方式 1：安装后通过命令行工具一键启动
+musicdl-web
+
+# 方式 2：使用 Python 模块启动
+python -m musicdl.web
+
+# 更多配置选项
+python -m musicdl.web --host 0.0.0.0 --port 5050 --work-dir ./my_downloads --no-browser
+```
+
+**命令行参数说明**：
+- `--host`：绑定主机地址（默认 `127.0.0.1`，设为 `0.0.0.0` 支持局域网/手机跨设备访问）。
+- `--port`：监听端口号（默认 `5050`）。
+- `--work-dir`：指定音频下载与临时缓存目录。
+- `--no-browser`：启动后禁止自动调起系统默认浏览器。
+
+**核心功能与技术特色**：
+- ⚡ **多源并发流式搜索 (SSE)**：采用 Server-Sent Events (SSE) 协议与后台多线程池，并发向多个音乐平台发起检索。各源结果立搜立见，无需等待全源完成。
+- 🎵 **在线即点即播代理 (HTTP Range Proxy)**：内置音频反向代理，无缝解决各大平台的防盗链（Referer / User-Agent）与跨域 CORS 拦截；原生支持 HTTP 206 断点与范围请求，实现即点即播、任意快进快退。
+- 📱 **移动端深度交互优化**：
+  - 顶栏无折行精简自适应布局，手机竖屏下品牌 Logo 与“歌单”、“格式”菜单 100% 同行整齐呈现。
+  - 移动端单通道直链无损安全下载，自动嵌入高清封面与 ID3v2 歌词标签，消除移动浏览器弹窗拦截。
+  - 移动端播放条与进度条起止点整齐对齐，歌曲与歌手信息居中优雅呈现。
+- 💻 **PC 桌面端沉浸播放体验**：
+  - 大播放器控制台对称布局，音量调节滑块与播放按键彻底解耦，杜绝界面重叠错位。
+  - 视口精准聚焦 5~6 行核心歌词，垂直居中同步平滑滚动高亮，搭配上下渐隐遮罩蒙版。
+- 💾 **智能下载与元数据补全**：
+  - 智能选择最高音质（无损 FLAC / 320k MP3 等），支持按需切换音频格式。
+  - 下载音频自动内嵌完整 ID3v2/MP4 专辑封面与 LRC 滚动歌词。
+  - 服务端响应头文件名采用 RFC 5987 / RFC 6266 标准化安全编码，彻底杜绝 Windows/Linux 中文文件名乱码。
+- 📂 **歌单批量解析与备份**：
+  - 支持主流平台歌单链接一键解析，自动提取并保留原始歌单名称。
+  - 本地“我的歌单”多源容灾备份、持久化存储与导出。
+- 🧪 **自动化测试套件**：
+  - 项目内置完整单元与端到端测试套件（位于 `tests/` 目录），覆盖流式搜索、音频代理、歌单解析、安全下载与双端播放器布局。运行 `python -m unittest discover -s tests` 即可一键验证。
+
+---
 
 #### Typical Usage
 
