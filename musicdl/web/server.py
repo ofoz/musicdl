@@ -517,7 +517,7 @@ def is_singer_match(target_singers, cand_artists, song_name, cand_name):
 
 
 def resolve_kuwo_direct_url(song_name, singers='', song_id=None):
-    """通过酷我官方接口获取 CDN 直链（严格歌手匹配，过滤 80KB 下架播报假音频）"""
+    """通过酷我官方接口获取 CDN 直链（严格歌手匹配，彻底拦截 588957081/563182854 及 <500KB 下架播报假音频）"""
     # 1. 若本身传入了酷我原生 ID（如酷我歌单），直接验证该 ID 直链
     if song_id:
         rid = str(song_id).removeprefix('MUSIC_')
@@ -525,11 +525,11 @@ def resolve_kuwo_direct_url(song_name, singers='', song_id=None):
             play_url_api = f"http://antiserver.kuwo.cn/anti.s?type=convert_url&rid={rid}&format=mp3&response=url"
             play_resp = requests.get(play_url_api, timeout=(2, 3), headers={'User-Agent': 'Mozilla/5.0'})
             res_url = play_resp.text.strip()
-            if res_url.startswith('http') and '563182854' not in res_url:
+            if res_url.startswith('http') and not any(fake_id in res_url for fake_id in ['588957081', '563182854']):
                 try:
                     head_resp = requests.head(res_url, timeout=2, headers={'User-Agent': 'Mozilla/5.0'})
                     clen = int(head_resp.headers.get('Content-Length', 0) or 0)
-                    if clen == 0 or clen >= 150 * 1024:
+                    if clen == 0 or clen >= 500 * 1024:
                         return res_url
                 except Exception:
                     return res_url
@@ -572,13 +572,13 @@ def resolve_kuwo_direct_url(song_name, singers='', song_id=None):
                 play_resp = requests.get(play_url_api, timeout=(2, 3), headers={'User-Agent': 'Mozilla/5.0'})
                 res_url = play_resp.text.strip()
                 if res_url.startswith('http'):
-                    # 坚决过滤酷我官方下架假音频 (81629 字节提示音 "当前音乐已从酷我音乐下线")
-                    if '563182854' in res_url:
+                    # 坚决过滤酷我官方下架假音频 (588957081 / 563182854 提示音 "当前音乐已从酷我音乐下线")
+                    if any(fake_id in res_url for fake_id in ['588957081', '563182854']):
                         continue
                     try:
                         head_resp = requests.head(res_url, timeout=2, headers={'User-Agent': 'Mozilla/5.0'})
                         clen = int(head_resp.headers.get('Content-Length', 0) or 0)
-                        if 0 < clen < 150 * 1024:
+                        if 0 < clen < 500 * 1024:
                             continue
                     except Exception:
                         pass
@@ -590,16 +590,17 @@ def resolve_kuwo_direct_url(song_name, singers='', song_id=None):
 
 
 def resolve_qq_fast_url(song_mid):
-    """QQ 音乐通过备用开放接口秒级获取播放直链"""
+    """QQ 音乐通过备用开放接口秒级获取播放直链（配置合理超时与快速重试）"""
     if not song_mid:
         return None
-    try:
-        r = requests.get(f'https://api.xunhuisi.store/API/QQMusic/Song.php?mid={song_mid}&type=json', timeout=(2, 3)).json()
-        u = r.get('music_url')
-        if u and str(u).startswith('http'):
-            return u
-    except Exception:
-        pass
+    for attempt in range(2):
+        try:
+            r = requests.get(f'https://api.xunhuisi.store/API/QQMusic/Song.php?mid={song_mid}&type=json', timeout=(3, 7)).json()
+            u = r.get('music_url')
+            if u and str(u).startswith('http'):
+                return u
+        except Exception:
+            continue
     return None
 
 
@@ -624,6 +625,39 @@ def clean_music_query(song_name, singers=''):
     if clean_singer.lower() in {'未知歌手', '未知艺人', 'various artists', 'unknown'}:
         clean_singer = ''
     return s_name, clean_singer
+
+
+def resolve_by_qq_search(song_name, singers=''):
+    """通过 QQ 音乐官方移动端检索对齐 mid，精准获取正品直链"""
+    if not song_name:
+        return None
+    s_name, c_singer = clean_music_query(song_name, singers)
+    query = f"{s_name} {c_singer}".strip() if c_singer else s_name
+    url = "https://u.y.qq.com/cgi-bin/musicu.fcg"
+    payload = {
+        "comm": {"ct": "19", "cv": "1859", "uin": "0"},
+        "music.search.SearchCgiService.DoSearchForQQMusicMobile": {
+            "method": "DoSearchForQQMusicMobile",
+            "module": "music.search.SearchCgiService",
+            "param": {"search_type": 0, "query": query, "page_num": 1, "num_per_page": 5}
+        }
+    }
+    try:
+        r = requests.post(url, json=payload, timeout=(3, 5)).json()
+        items = safe_dict_extract(r, ["music.search.SearchCgiService.DoSearchForQQMusicMobile", "data", "body", "item_song"], [])
+        for item in (items or []):
+            cand_name = str(item.get("title", "")).replace("<em>", "").replace("</em>", "")
+            cand_singers = [s.get("name") for s in (item.get("singer", []) or []) if isinstance(s, dict) and s.get("name")]
+            if not is_singer_match(singers, cand_singers, song_name, cand_name):
+                continue
+            mid = item.get("mid")
+            if mid:
+                u = resolve_qq_fast_url(mid)
+                if u:
+                    return u
+    except Exception:
+        pass
+    return None
 
 
 def resolve_netease_lrc_by_id(song_id):
@@ -812,6 +846,11 @@ def resolve_instant_stream(song, entry):
             if url:
                 song.download_url = url
                 return url
+        # 自带 mid 遇到偶发抖动或无有效 mid 时，在 QQ 音乐本源平台内进行歌手严格对齐搜索直连
+        url = resolve_by_qq_search(song.song_name, song.singers)
+        if url:
+            song.download_url = url
+            return url
 
     # 2.【歌单平台绝对优先】若歌单来自网易云音乐，100% 直奔网易云官方原版直通！
     if source == 'NeteaseMusicClient' or '163' in str(source).lower() or 'netease' in str(source).lower():
@@ -836,18 +875,15 @@ def resolve_instant_stream(song, entry):
         song.download_url = url
         return url
 
-    url = resolve_kuwo_direct_url(song.song_name, song.singers)
+    url = resolve_by_qq_search(song.song_name, song.singers)
     if url:
         song.download_url = url
         return url
 
-    # 5. QQ 音乐开放直链备用
-    mid = getattr(song, 'identifier', '') or raw_search.get('mid') or raw_search.get('songmid')
-    if mid:
-        url = resolve_qq_fast_url(mid)
-        if url:
-            song.download_url = url
-            return url
+    url = resolve_kuwo_direct_url(song.song_name, song.singers)
+    if url:
+        song.download_url = url
+        return url
 
     return url
 
