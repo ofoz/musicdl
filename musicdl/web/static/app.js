@@ -30,6 +30,22 @@ const FORMAT_LABELS = {
   'm4a': 'M4A'
 };
 
+// 安全网络 JSON 解析器：捕获 502/504 等 HTML 异常页面，消除 Unexpected token '<' 报错
+async function safeFetchJson(url, options = {}) {
+  const res = await fetch(url, options);
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    if (res.status === 504 || res.status === 502) {
+      throw new Error(`网关响应超时 (HTTP ${res.status})，反代已切断连接`);
+    }
+    throw new Error(`服务响应异常 (HTTP ${res.status})`);
+  }
+  return data;
+}
+
 // DOM Elements
 const searchInput = document.getElementById('searchInput');
 const searchBtn = document.getElementById('searchBtn');
@@ -1017,7 +1033,7 @@ audioElement.onerror = async () => {
   showToast(`正在智能恢复《${track.song_name}》的可用音源通道...`);
 
   try {
-    const res = await fetch('/api/track/resolve', {
+    const data = await safeFetchJson('/api/track/resolve', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1026,7 +1042,6 @@ audioElement.onerror = async () => {
         source: track.source
       })
     });
-    const data = await res.json();
     if (data.success && data.track) {
       const newTrack = data.track;
       newTrack._healTried = true;
@@ -1310,19 +1325,18 @@ parsePlaylistBtn.onclick = async () => {
   parsePlaylistBtn.innerText = '正在解析中...';
 
   try {
-    const res = await fetch('/api/playlist/parse', {
+    const data = await safeFetchJson('/api/playlist/parse', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url })
     });
-    const data = await res.json();
     if (data.error) {
       alert(data.error);
       return;
     }
 
     state.playlistTracks = data.tracks || [];
-    playlistCountText.innerText = `解析成功：来自 ${data.source}，共 ${state.playlistTracks.length} 首歌曲`;
+    playlistCountText.innerText = `解析成功：来自 ${data.source_label || data.source}，共 ${state.playlistTracks.length} 首歌曲`;
     playlistResultCard.classList.remove('hidden');
     renderPlaylistTable();
   } catch (err) {
@@ -1695,11 +1709,11 @@ function renderMyPlaylistsCards() {
       };
     }
 
-    // 单曲点击播放与下载
+    // 单曲点击播放与下载（全端单点即播，兼容手机触控与电脑单击）
     card.querySelectorAll('.playlist-track-item').forEach(itemEl => {
       const tIdx = parseInt(itemEl.dataset.trackIdx, 10);
       const track = pl.tracks[tIdx];
-      itemEl.ondblclick = () => {
+      itemEl.onclick = () => {
         state.tracks = [...pl.tracks];
         resultsTableBody.innerHTML = '';
         state.tracks.forEach((t, i) => appendTrackRow(t, i));
@@ -1721,12 +1735,11 @@ function renderMyPlaylistsCards() {
 
 // 后台异步任务执行器 (并发不阻塞)
 function runPlaylistTask(taskItem) {
-  fetch('/api/playlist/parse', {
+  safeFetchJson('/api/playlist/parse', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url: taskItem.url })
   })
-  .then(res => res.json())
   .then(data => {
     const curList = getMyPlaylists();
     const target = curList.find(p => p.id === taskItem.id);

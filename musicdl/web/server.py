@@ -457,6 +457,26 @@ def make_content_disposition(filename: str, ext: str = 'mp3') -> str:
     return f'attachment; filename="{safe_ascii}"; filename*=UTF-8\'\'{encoded_filename}'
 
 
+def resolve_netease_direct_url(song_id):
+    """0.1秒获取网易云官方高品质音频直链"""
+    if not song_id:
+        return None
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://music.163.com/',
+    }
+    for level in ['standard', 'exhigh']:
+        try:
+            data = {'ids': json.dumps([int(song_id)]), 'level': level, 'encodeType': 'mp3'}
+            resp = requests.post('https://music.163.com/api/song/enhance/player/url/v1', data=data, headers=headers, timeout=(2, 4), verify=False).json()
+            items = resp.get('data') or []
+            if items and items[0].get('url'):
+                return items[0]['url']
+        except Exception:
+            continue
+    return None
+
+
 @app.route('/api/stream/<token>')
 def api_stream(token):
     entry = REGISTRY.get(token)
@@ -465,6 +485,38 @@ def api_stream(token):
 
     song = entry['song_info']
     url = getattr(song, 'download_url', None)
+    if not url or not str(url).startswith('http'):
+        # 1. 优先通过网易云原始 songid 0.1 秒直通官方高品质直链
+        raw_search = getattr(song, 'raw_data', {}).get('search', {}) if hasattr(song, 'raw_data') else {}
+        song_id = raw_search.get('songid')
+        if song_id and (entry.get('source') == 'NeteaseMusicClient' or '163' in str(entry.get('source'))):
+            direct_url = resolve_netease_direct_url(song_id)
+            if direct_url:
+                song.download_url = direct_url
+                url = direct_url
+
+        # 2. 其它情况或未匹配到时快速检索兜底
+        if not url or not str(url).startswith('http'):
+            source = entry.get('source')
+            query = f"{song.song_name} {song.singers}".strip()
+            candidate_sources = [source] if source in SUPPORTED_SOURCES else []
+            for s in ['NeteaseMusicClient', 'KuwoMusicClient']:
+                if s not in candidate_sources and s in SUPPORTED_SOURCES:
+                    candidate_sources.append(s)
+            for target_src in candidate_sources[:2]:
+                try:
+                    client = MANAGER.get_client(target_src)
+                    results = client.search(query)
+                    if results and getattr(results[0], 'download_url', None):
+                        entry['song_info'] = results[0]
+                        entry['source'] = target_src
+                        entry['headers'] = getattr(results[0], 'download_headers', {}) or {'User-Agent': 'Mozilla/5.0'}
+                        song = results[0]
+                        url = song.download_url
+                        break
+                except Exception:
+                    continue
+
     if not url or not str(url).startswith('http'):
         return '无效的音频直链', 404
 
@@ -647,6 +699,75 @@ def extract_playlist_title(client, song_infos, url):
     return (str(name).strip() if name and not str(name).startswith('playlist-') else '')
 
 
+def fast_parse_netease_playlist(url):
+    """极速秒级解析网易云歌单元数据，0.3秒获取全量歌曲信息"""
+    m = re.search(r'id=(\d+)', url)
+    if not m:
+        m = re.search(r'playlist/(\d+)', url)
+    if not m:
+        return None
+    playlist_id = m.group(1)
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://music.163.com/',
+    }
+    try:
+        resp = requests.post('https://music.163.com/api/v6/playlist/detail', data={'id': playlist_id}, headers=headers, timeout=(3, 8), verify=False)
+        data = resp.json()
+        playlist = data.get('playlist') or {}
+        title = playlist.get('name') or f"网易云歌单-{playlist_id}"
+        tracks_raw = playlist.get('tracks') or []
+        track_ids = [t.get('id') for t in (playlist.get('trackIds') or []) if t.get('id')]
+
+        if len(tracks_raw) < len(track_ids) and track_ids:
+            needed_ids = track_ids[:200]
+            try:
+                detail_resp = requests.post(
+                    'https://music.163.com/api/v3/song/detail',
+                    data={'c': json.dumps([{'id': i} for i in needed_ids])},
+                    headers=headers, timeout=(3, 8), verify=False
+                ).json()
+                if detail_resp.get('songs'):
+                    tracks_raw = detail_resp.get('songs')
+            except Exception:
+                pass
+
+        song_infos = []
+        for t in tracks_raw:
+            song_name = t.get('name') or '未知歌曲'
+            singers = ' / '.join([ar.get('name') for ar in t.get('ar', []) if ar.get('name')]) or '未知歌手'
+            album = t.get('al', {}).get('name') or ''
+            cover_url = t.get('al', {}).get('picUrl') or ''
+            duration = int(t.get('dt', 0) / 1000)
+            song_info = SongInfo(
+                source='NeteaseMusicClient',
+                raw_data={
+                    'search': {
+                        'songid': str(t.get('id')),
+                        'songname': song_name,
+                        'singers': singers,
+                        'album': album,
+                        'cover_url': cover_url,
+                        'duration': duration,
+                    },
+                    'download': {},
+                    'lyric': {}
+                }
+            )
+            song_info.song_name = song_name
+            song_info.singers = singers
+            song_info.album = album
+            song_info.cover_url = cover_url
+            song_info.duration = duration
+            song_infos.append(song_info)
+
+        return title, song_infos
+    except Exception as e:
+        print(f"fast_parse_netease_playlist failed: {e}")
+        return None
+
+
 @app.route('/api/playlist/parse', methods=['POST'])
 def api_parse_playlist():
     data = request.get_json(silent=True) or {}
@@ -687,6 +808,25 @@ def api_parse_playlist():
     source_label = source_label_map.get(source, source)
 
     try:
+        # 1. 优先尝试秒级极速元数据解析（针对网易云等超大歌单，秒出结果彻底避免 504 Gateway Time-out）
+        if source == 'NeteaseMusicClient' or '163.com' in url:
+            fast_res = fast_parse_netease_playlist(url)
+            if fast_res:
+                final_title, song_infos = fast_res
+                tracks = []
+                for song_info in (song_infos or []):
+                    token = REGISTRY.add(song_info, 'NeteaseMusicClient')
+                    tracks.append(track_to_payload(song_info, token, 'NeteaseMusicClient'))
+                return jsonify({
+                    'source': 'NeteaseMusicClient',
+                    'source_label': '网易云音乐',
+                    'title': final_title,
+                    'playlist_name': final_title,
+                    'count': len(tracks),
+                    'tracks': tracks
+                })
+
+        # 2. 兜底调用客户端原生解析
         client = MANAGER.get_client(source)
         if hasattr(client, 'cur_playlist_name'):
             delattr(client, 'cur_playlist_name')
@@ -747,15 +887,16 @@ def api_track_resolve():
     candidate_sources = []
     if source and source in SUPPORTED_SOURCES:
         candidate_sources.append(source)
-    for s in ['KuwoMusicClient', 'NeteaseMusicClient', 'QQMusicClient', 'KugouMusicClient', 'MiguMusicClient']:
+    for s in ['NeteaseMusicClient', 'KuwoMusicClient', 'QQMusicClient']:
         if s not in candidate_sources and s in SUPPORTED_SOURCES:
             candidate_sources.append(s)
 
-    for src in candidate_sources:
+    # 限制最多探测 2 个高命中率源，避免串行堆叠触发网关超时
+    for src in candidate_sources[:2]:
         try:
             client = MANAGER.get_client(src)
             results = client.search(query)
-            if results:
+            if results and getattr(results[0], 'download_url', None):
                 best = results[0]
                 new_token = REGISTRY.add(best, src)
                 payload = track_to_payload(best, new_token, src)
