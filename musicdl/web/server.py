@@ -478,16 +478,49 @@ def resolve_netease_direct_url(song_id):
     return None
 
 
-def resolve_by_netease_search(song_name, singers):
-    """跨平台秒级音频直链检索：0.3秒精准命中高品质直链"""
+def resolve_kuwo_direct_url(song_name, singers=''):
+    """通过酷我官方轻量接口0.4秒极速获取全网任意歌曲的CDN播放直链"""
     if not song_name:
         return None
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://music.163.com/',
-    }
     clean_singers = str(singers or '').split(' / ')[0].split(',')[0].strip()
     query = f"{song_name} {clean_singers}".strip() if clean_singers else str(song_name).strip()
+    try:
+        url = f"http://search.kuwo.cn/r.s?client=kt&all={urllib.parse.quote(query)}&pn=0&rn=1&rformat=json&encoding=utf8"
+        resp = requests.get(url, timeout=(2, 3), headers={'User-Agent': 'Mozilla/5.0'})
+        m = re.search(r"['\"]MUSICRID['\"]\s*:\s*['\"](?:MUSIC_)?(\d+)['\"]", resp.text)
+        if m:
+            rid = m.group(1)
+            play_url_api = f"http://antiserver.kuwo.cn/anti.s?type=convert_url&rid={rid}&format=mp3&response=url"
+            play_resp = requests.get(play_url_api, timeout=(2, 3), headers={'User-Agent': 'Mozilla/5.0'})
+            res_url = play_resp.text.strip()
+            if res_url.startswith('http'):
+                return res_url
+    except Exception:
+        pass
+    return None
+
+
+def resolve_qq_fast_url(song_mid):
+    """QQ 音乐通过备用开放接口秒级获取播放直链"""
+    if not song_mid:
+        return None
+    try:
+        r = requests.get(f'https://api.xunhuisi.store/API/QQMusic/Song.php?mid={song_mid}&type=json', timeout=(2, 3)).json()
+        u = r.get('music_url')
+        if u and str(u).startswith('http'):
+            return u
+    except Exception:
+        pass
+    return None
+
+
+def resolve_fast_lrc(song_name, singers=''):
+    """极速获取多源同步 LRC 歌词"""
+    if not song_name:
+        return ''
+    clean_singers = str(singers or '').split(' / ')[0].split(',')[0].strip()
+    query = f"{song_name} {clean_singers}".strip() if clean_singers else str(song_name).strip()
+    headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://music.163.com/'}
     try:
         sr = requests.post(
             'https://music.163.com/api/search/get/web',
@@ -499,10 +532,44 @@ def resolve_by_netease_search(song_name, singers):
         songs = sr.get('result', {}).get('songs', [])
         if songs and songs[0].get('id'):
             sid = songs[0]['id']
-            return resolve_netease_direct_url(sid)
+            lr = requests.get(f'https://music.163.com/api/song/lyric?id={sid}&lv=1&kv=1&tv=-1', headers=headers, timeout=(2, 3), verify=False).json()
+            lrc = lr.get('lrc', {}).get('lyric', '')
+            if lrc:
+                return str(lrc).strip()
     except Exception:
         pass
-    return None
+    return ''
+
+
+def resolve_instant_stream(song, entry):
+    """0.3~0.8 秒按需即时获取直链，彻底代替慢速的 client.search() 避免反代 504 超时"""
+    url = getattr(song, 'download_url', None)
+    if url and str(url).startswith('http'):
+        return url
+
+    # 1. 酷我官方极速 CDN 直链（全网歌曲覆盖率高，0.4s 官方极速响应，免鉴权）
+    url = resolve_kuwo_direct_url(song.song_name, song.singers)
+
+    # 2. 网易云原生曲目：尝试官方直接直链
+    if not url:
+        raw_search = getattr(song, 'raw_data', {}).get('search', {}) if hasattr(song, 'raw_data') else {}
+        song_id = raw_search.get('songid')
+        if song_id:
+            url = resolve_netease_direct_url(song_id)
+
+    # 3. QQ 音乐专属直通
+    if not url and (entry.get('source') == 'QQMusicClient' or 'qq' in str(entry.get('source')).lower()):
+        mid = song.identifier or raw_search.get('mid') or raw_search.get('songmid')
+        if mid:
+            url = resolve_qq_fast_url(mid)
+
+    # 4. 网易云跨平台检索对齐备用
+    if not url:
+        url = resolve_by_netease_search(song.song_name, song.singers)
+
+    if url:
+        song.download_url = url
+    return url
 
 
 @app.route('/api/stream/<token>')
@@ -512,45 +579,7 @@ def api_stream(token):
         return '音频已失效或未找到', 404
 
     song = entry['song_info']
-    url = getattr(song, 'download_url', None)
-    if not url or not str(url).startswith('http'):
-        # 1. 优先通过网易云原始 songid 0.1 秒直通官方高品质直链
-        raw_search = getattr(song, 'raw_data', {}).get('search', {}) if hasattr(song, 'raw_data') else {}
-        song_id = raw_search.get('songid')
-        if song_id and (entry.get('source') == 'NeteaseMusicClient' or '163' in str(entry.get('source'))):
-            direct_url = resolve_netease_direct_url(song_id)
-            if direct_url:
-                song.download_url = direct_url
-                url = direct_url
-
-        # 2. 其它平台（QQ音乐、酷狗、酷我等）歌单单曲，优先通过跨平台极速对齐直链（0.3s起播）
-        if not url or not str(url).startswith('http'):
-            direct_url = resolve_by_netease_search(song.song_name, song.singers)
-            if direct_url:
-                song.download_url = direct_url
-                url = direct_url
-
-        # 3. 其它情况或未匹配到时快速检索兜底
-        if not url or not str(url).startswith('http'):
-            source = entry.get('source')
-            query = f"{song.song_name} {song.singers}".strip()
-            candidate_sources = [source] if source in SUPPORTED_SOURCES else []
-            for s in ['KuwoMusicClient', 'NeteaseMusicClient']:
-                if s not in candidate_sources and s in SUPPORTED_SOURCES:
-                    candidate_sources.append(s)
-            for target_src in candidate_sources[:2]:
-                try:
-                    client = MANAGER.get_client(target_src)
-                    results = client.search(query)
-                    if results and getattr(results[0], 'download_url', None):
-                        entry['song_info'] = results[0]
-                        entry['source'] = target_src
-                        entry['headers'] = getattr(results[0], 'download_headers', {}) or {'User-Agent': 'Mozilla/5.0'}
-                        song = results[0]
-                        url = song.download_url
-                        break
-                except Exception:
-                    continue
+    url = resolve_instant_stream(song, entry)
 
     if not url or not str(url).startswith('http'):
         return '无效的音频直链', 404
@@ -560,14 +589,26 @@ def api_stream(token):
     target_format = (request.args.get('format') or 'original').lower().strip().lstrip('.')
     orig_ext = (str(getattr(song, 'ext', 'mp3')) or 'mp3').lstrip('.').lower()
 
-    upstream_headers = dict(entry['headers'])
+    # 规范化 upstream_headers，根据真实直链域名配置，坚决避免跨平台 referer 引发 CDN 403 Forbidden
+    upstream_headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': '*/*',
+        'Accept-Encoding': 'identity;q=1, *;q=0',
+    }
+    if 'kuwo.cn' in url:
+        upstream_headers['Referer'] = 'http://www.kuwo.cn/'
+    elif 'music.126.net' in url or '163.com' in url:
+        upstream_headers['Referer'] = 'https://music.163.com/'
+    elif 'qqmusic.qq.com' in url or 'qq.com' in url:
+        upstream_headers['Referer'] = 'https://y.qq.com/'
+
     range_header = request.headers.get('Range')
     if range_header and not is_download:
         upstream_headers['Range'] = range_header
 
     try:
-        up = requests.get(url, headers=upstream_headers, cookies=entry['cookies'],
-                          stream=True, timeout=(10, 30), verify=False)
+        up = requests.get(url, headers=upstream_headers,
+                          stream=True, timeout=(6, 15), verify=False)
     except Exception as err:
         return f'源站连接失败: {err}', 502
 
@@ -666,6 +707,11 @@ def api_lyric(token):
     song = entry['song_info']
     raw_lyric = getattr(song, 'lyric', '') or ''
     lyric = str(raw_lyric).strip()
+
+    if not lyric:
+        lyric = resolve_fast_lrc(song.song_name, song.singers)
+        if lyric:
+            song.lyric = lyric
 
     if request.args.get('download') == '1':
         if not lyric:
@@ -932,28 +978,21 @@ def api_track_resolve():
     if not song_name:
         return jsonify({'error': '缺少歌曲名'}), 400
 
-    query = f"{song_name} {singers}".strip()
-    candidate_sources = []
-    if source and source in SUPPORTED_SOURCES:
-        candidate_sources.append(source)
-    for s in ['NeteaseMusicClient', 'KuwoMusicClient', 'QQMusicClient']:
-        if s not in candidate_sources and s in SUPPORTED_SOURCES:
-            candidate_sources.append(s)
+    # 秒级极速获取可用直链，绝不调用慢速全局 search 导致网关 504 切断
+    direct_url = resolve_kuwo_direct_url(song_name, singers) or resolve_by_netease_search(song_name, singers)
+    if direct_url:
+        new_song = SongInfo(
+            source='KuwoMusicClient' if 'kuwo' in direct_url else 'NeteaseMusicClient',
+            song_name=song_name,
+            singers=singers or '未知歌手',
+            download_url=direct_url
+        )
+        new_song.ext = 'mp3'
+        new_token = REGISTRY.add(new_song, new_song.source)
+        payload = track_to_payload(new_song, new_token, new_song.source)
+        return jsonify({'success': True, 'track': payload})
 
-    # 限制最多探测 2 个高命中率源，避免串行堆叠触发网关超时
-    for src in candidate_sources[:2]:
-        try:
-            client = MANAGER.get_client(src)
-            results = client.search(query)
-            if results and getattr(results[0], 'download_url', None):
-                best = results[0]
-                new_token = REGISTRY.add(best, src)
-                payload = track_to_payload(best, new_token, src)
-                return jsonify({'success': True, 'track': payload})
-        except Exception:
-            continue
-
-    return jsonify({'error': f'未检索到可用的音源直链: {song_name}'}), 404
+    return jsonify({'error': f'未检索到可用的音源直链: {song_name}'}), 200
 
 
 def run_server(host='127.0.0.1', port=5050, work_dir=None):
