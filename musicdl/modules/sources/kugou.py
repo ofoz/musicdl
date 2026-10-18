@@ -390,6 +390,40 @@ class KugouMusicClient(BaseMusicClient):
             if not playlist_result_first: playlist_result_first = copy.deepcopy(playlist_result)
             if (float(safeextractfromdict(playlist_result, ['data', 'count'], 0)) <= len(tracks_in_playlist)): break
         tracks_in_playlist = list({d["hash"]: d for d in tracks_in_playlist}.values())
+        # 极速 Web 模式：直接提取歌单元数据快速组装，避免逐首探测导致网关 504 超时
+        if getattr(self, 'fast_metadata_mode', True) or os.environ.get('MUSICDL_FAST_PLAYLIST', 'true').lower() == 'true':
+            for track_info in tracks_in_playlist:
+                raw_name = track_info.get('name') or track_info.get('songname') or track_info.get('filename') or '未知歌曲'
+                singers_list = [s.get('name') for s in (track_info.get('singerinfo', []) or []) if isinstance(s, dict) and s.get('name')]
+                singers = ', '.join(singers_list) if singers_list else ''
+                song_name = raw_name
+                if not singers and ' - ' in raw_name:
+                    parts = raw_name.split(' - ', 1)
+                    singers = parts[0].strip()
+                    song_name = parts[1].strip()
+                elif ' - ' in raw_name and singers:
+                    parts = raw_name.split(' - ', 1)
+                    song_name = parts[1].strip()
+                album = safeextractfromdict(track_info, ['albuminfo', 'name'], '') or track_info.get('album_name') or ''
+                cover_url = str(track_info.get('cover') or '').replace('{size}', '400')
+                timelen = float(track_info.get('timelen', 0) or 0)
+                duration_s = int(timelen / 1000) if timelen > 1000 else int(float(track_info.get('duration', 0) or 0))
+                song_info = SongInfo(
+                    raw_data={'search': track_info, 'download': {}, 'lyric': {}},
+                    source=self.source,
+                    song_name=legalizestring(song_name or raw_name),
+                    singers=legalizestring(singers or '未知歌手'),
+                    album=legalizestring(album),
+                    cover_url=cover_url,
+                    duration_s=duration_s,
+                    duration=SongInfoUtils.seconds2hms(duration_s),
+                    identifier=str(track_info.get('hash') or '')
+                )
+                song_infos.append(song_info)
+            playlist_name = legalizestring(safeextractfromdict(playlist_result_first, ['data', 'specialname'], None) or f"playlist-{playlist_id}")
+            self.cur_playlist_name = playlist_name
+            return song_infos
+
         # parse track by track in playlist
         with Progress(TextColumn("{task.description}"), BarColumn(bar_width=None), MofNCompleteColumn(), TimeRemainingColumn(), refresh_per_second=10) as main_process_context:
             main_progress_id = main_process_context.add_task(f"{len(tracks_in_playlist)} Songs Found in Playlist {playlist_id} >>> Completed (0/{len(tracks_in_playlist)}) SongInfo", total=len(tracks_in_playlist))

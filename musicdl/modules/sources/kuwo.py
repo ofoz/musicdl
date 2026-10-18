@@ -277,22 +277,47 @@ class KuwoMusicClient(BaseMusicClient):
     @useparseheaderscookies
     def parseplaylist(self, playlist_url: str, request_overrides: dict = None):
         # init
-        playlist_url, playlist_id = self.session.head(playlist_url, allow_redirects=True, **(request_overrides := dict(request_overrides or {}))).url, None
+        playlist_url = self.session.head(playlist_url, allow_redirects=True, timeout=(3, 8), **(request_overrides := dict(request_overrides or {}))).url
         with suppress(Exception): playlist_id, song_infos = parse_qs(urlparse(playlist_url).query, keep_blank_values=False).get('id')[0], []
         if not playlist_id: playlist_id, song_infos = urlparse(playlist_url).path.strip('/').split('/')[-1].removesuffix('.html').removesuffix('.htm'), []
         if (not (hostname := obtainhostname(url=playlist_url))) or (not hostmatchessuffix(hostname, KUWO_MUSIC_HOSTS)): return song_infos
         # get tracks in playlist
         tracks_in_playlist, page, playlist_result_first = [], 1, {}
         while True:
-            with suppress(Exception): (resp := self.get(f"https://m.kuwo.cn/newh5app/wapi/api/www/playlist/playListInfo?pid={playlist_id}&pn={page}&rn=100", **request_overrides)).raise_for_status()
+            with suppress(Exception): (resp := self.get(f"https://m.kuwo.cn/newh5app/wapi/api/www/playlist/playListInfo?pid={playlist_id}&pn={page}&rn=100", timeout=(3, 8), **request_overrides)).raise_for_status()
             if not locals().get('resp') or not hasattr(locals().get('resp'), 'text') or (not safeextractfromdict((playlist_result := resp2json(resp=resp)), ['data', 'musicList'], [])): break
             tracks_in_playlist.extend(safeextractfromdict(playlist_result, ['data', 'musicList'], [])); page += 1; del resp
             if not playlist_result_first: playlist_result_first = copy.deepcopy(playlist_result)
-            if (float(safeextractfromdict(playlist_result, ['data', 'total'], 0)) <= len(tracks_in_playlist)): break
+            if (float(safeextractfromdict(playlist_result, ['data', 'total'], 0)) <= len(tracks_in_playlist)) or page > 5: break
         tracks_in_playlist = list({d["musicrid"]: d for d in tracks_in_playlist}.values())
+        # 极速 Web 模式：直接基于歌单元数据快速组装，避免逐首探测导致网关 504 超时
+        if getattr(self, 'fast_metadata_mode', True) or os.environ.get('MUSICDL_FAST_PLAYLIST', 'true').lower() == 'true':
+            for track_info in tracks_in_playlist:
+                song_name = legalizestring(track_info.get('name') or track_info.get('songname') or '未知歌曲')
+                singers = legalizestring(track_info.get('artist') or track_info.get('singers') or '未知歌手')
+                album = legalizestring(track_info.get('album') or '')
+                cover_url = track_info.get('pic') or track_info.get('pic120') or ''
+                duration_s = int(float(track_info.get('duration', 0) or 0))
+                song_info = SongInfo(
+                    raw_data={'search': track_info, 'download': {}, 'lyric': {}},
+                    source=self.source,
+                    song_name=song_name,
+                    singers=singers,
+                    album=album,
+                    cover_url=cover_url,
+                    duration_s=duration_s,
+                    duration=SongInfoUtils.seconds2hms(duration_s),
+                    identifier=str(track_info.get('rid') or track_info.get('musicrid'))
+                )
+                song_infos.append(song_info)
+            playlist_name = legalizestring(safeextractfromdict(playlist_result_first, ['data', 'name'], None) or f"playlist-{playlist_id}")
+            self.cur_playlist_name = playlist_name
+            return song_infos
+
         # parse track by track in playlist
         with Progress(TextColumn("{task.description}"), BarColumn(bar_width=None), MofNCompleteColumn(), TimeRemainingColumn(), refresh_per_second=10) as main_process_context:
             main_progress_id = main_process_context.add_task(f"{len(tracks_in_playlist)} Songs Found in Playlist {playlist_id} >>> Completed (0/{len(tracks_in_playlist)}) SongInfo", total=len(tracks_in_playlist))
+            idx = -1
             for idx, track_info in enumerate(tracks_in_playlist):
                 if idx > 0: main_process_context.advance(main_progress_id, 1); main_process_context.update(main_progress_id, description=f"{len(tracks_in_playlist)} Songs Found in Playlist {playlist_id} >>> Completed ({idx}/{len(tracks_in_playlist)}) SongInfo")
                 song_info = SongInfo(source=self.source, raw_data={'search': track_info, 'download': {}, 'lyric': {}})

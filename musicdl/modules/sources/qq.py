@@ -484,16 +484,49 @@ class QQMusicClient(BaseMusicClient):
     @useparseheaderscookies
     def parseplaylist(self, playlist_url: str, request_overrides: dict = None):
         # init
-        playlist_url, playlist_id = self.session.head(playlist_url, allow_redirects=True, **dict(request_overrides := request_overrides or {})).url, None
-        with suppress(Exception): playlist_id, song_infos = parse_qs(urlparse(playlist_url).query, keep_blank_values=False).get('id')[0], []
-        if not playlist_id: playlist_id, song_infos = urlparse(playlist_url).path.strip('/').split('/')[-1].removesuffix('.html').removesuffix('.htm'), []
+        playlist_url = self.session.head(playlist_url, allow_redirects=True, timeout=(3, 8), **dict(request_overrides := request_overrides or {})).url
+        parsed_q = parse_qs(urlparse(playlist_url).query, keep_blank_values=False)
+        playlist_id = (parsed_q.get('id') or parsed_q.get('disstid') or [None])[0]
+        if not playlist_id:
+            m = re.search(r'playlist/(\d+)', playlist_url)
+            if m:
+                playlist_id = m.group(1)
+            else:
+                playlist_id = urlparse(playlist_url).path.strip('/').split('/')[-1].removesuffix('.html').removesuffix('.htm')
+        song_infos = []
         if (not (hostname := obtainhostname(url=playlist_url))) or (not hostmatchessuffix(hostname, QQ_MUSIC_HOSTS)): return song_infos
         # get tracks in playlist
-        (resp := self.get("https://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg", headers={"Referer": f"https://y.qq.com/n/ryqq/playlist/{playlist_id}"}, params={"disstid": str(playlist_id), "type": "1", "json": "1", "utf8": "1", "onlysong": "0", "format": "json"}, **request_overrides)).raise_for_status()
+        (resp := self.get("https://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg", headers={"Referer": f"https://y.qq.com/n/ryqq/playlist/{playlist_id}"}, params={"disstid": str(playlist_id), "type": "1", "json": "1", "utf8": "1", "onlysong": "0", "format": "json"}, timeout=(3, 8), **request_overrides)).raise_for_status()
         tracks_in_playlist = (safeextractfromdict((playlist_result := resp2json(resp=resp)), ['cdlist', 0, 'songlist'], []) or safeextractfromdict(playlist_result, ['cdlist', 0, 'list'], []) or safeextractfromdict(playlist_result, ['songlist'], []) or [])
+        # 极速 Web 模式：直接基于歌单元数据快速组装，避免逐首探测导致网关 504 超时
+        if getattr(self, 'fast_metadata_mode', True) or os.environ.get('MUSICDL_FAST_PLAYLIST', 'true').lower() == 'true':
+            for track_info in tracks_in_playlist:
+                song_name = legalizestring(track_info.get('title') or track_info.get('songname') or '未知歌曲')
+                singers = legalizestring(', '.join([singer.get('name') for singer in (track_info.get('singer', []) or []) if isinstance(singer, dict) and singer.get('name')]) or '未知歌手')
+                album = legalizestring(safeextractfromdict(track_info, ['album', 'title'], None) or track_info.get('albumname') or '')
+                album_mid = safeextractfromdict(track_info, ['album', 'mid'], '') or track_info.get('albummid') or ''
+                cover_url = f"https://y.gtimg.cn/music/photo_new/T002R800x800M000{album_mid}.jpg" if album_mid else ''
+                duration_s = int(float(track_info.get('interval', 0) or 0))
+                song_info = SongInfo(
+                    raw_data={'search': track_info, 'download': {}, 'lyric': {}},
+                    source=self.source,
+                    song_name=song_name,
+                    singers=singers,
+                    album=album,
+                    cover_url=cover_url,
+                    duration_s=duration_s,
+                    duration=SongInfoUtils.seconds2hms(duration_s),
+                    identifier=str(track_info.get('mid') or track_info.get('songmid'))
+                )
+                song_infos.append(song_info)
+            playlist_name = legalizestring(safeextractfromdict(playlist_result, ['cdlist', 0, 'dissname'], None) or f"playlist-{playlist_id}")
+            self.cur_playlist_name = playlist_name
+            return song_infos
+
         # parse track by track in playlist
         with Progress(TextColumn("{task.description}"), BarColumn(bar_width=None), MofNCompleteColumn(), TimeRemainingColumn(), refresh_per_second=10) as main_process_context:
             main_progress_id = main_process_context.add_task(f"{len(tracks_in_playlist)} Songs Found in Playlist {playlist_id} >>> Completed (0/{len(tracks_in_playlist)}) SongInfo", total=len(tracks_in_playlist))
+            idx = -1
             for idx, track_info in enumerate(tracks_in_playlist):
                 if idx > 0: main_process_context.advance(main_progress_id, 1); main_process_context.update(main_progress_id, description=f"{len(tracks_in_playlist)} Songs Found in Playlist {playlist_id} >>> Completed ({idx}/{len(tracks_in_playlist)}) SongInfo")
                 song_info = SongInfo(source=self.source, raw_data={'search': track_info, 'download': {}, 'lyric': {}})

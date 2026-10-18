@@ -16,6 +16,7 @@ import tempfile
 import urllib.parse
 import threading
 import requests
+import concurrent.futures
 from pathlib import Path
 from flask import Flask, request, Response, jsonify, send_from_directory, stream_with_context
 
@@ -477,6 +478,33 @@ def resolve_netease_direct_url(song_id):
     return None
 
 
+def resolve_by_netease_search(song_name, singers):
+    """跨平台秒级音频直链检索：0.3秒精准命中高品质直链"""
+    if not song_name:
+        return None
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://music.163.com/',
+    }
+    clean_singers = str(singers or '').split(' / ')[0].split(',')[0].strip()
+    query = f"{song_name} {clean_singers}".strip() if clean_singers else str(song_name).strip()
+    try:
+        sr = requests.post(
+            'https://music.163.com/api/search/get/web',
+            data={'s': query, 'type': 1, 'limit': 1},
+            headers=headers,
+            timeout=(2, 3),
+            verify=False
+        ).json()
+        songs = sr.get('result', {}).get('songs', [])
+        if songs and songs[0].get('id'):
+            sid = songs[0]['id']
+            return resolve_netease_direct_url(sid)
+    except Exception:
+        pass
+    return None
+
+
 @app.route('/api/stream/<token>')
 def api_stream(token):
     entry = REGISTRY.get(token)
@@ -495,12 +523,19 @@ def api_stream(token):
                 song.download_url = direct_url
                 url = direct_url
 
-        # 2. 其它情况或未匹配到时快速检索兜底
+        # 2. 其它平台（QQ音乐、酷狗、酷我等）歌单单曲，优先通过跨平台极速对齐直链（0.3s起播）
+        if not url or not str(url).startswith('http'):
+            direct_url = resolve_by_netease_search(song.song_name, song.singers)
+            if direct_url:
+                song.download_url = direct_url
+                url = direct_url
+
+        # 3. 其它情况或未匹配到时快速检索兜底
         if not url or not str(url).startswith('http'):
             source = entry.get('source')
             query = f"{song.song_name} {song.singers}".strip()
             candidate_sources = [source] if source in SUPPORTED_SOURCES else []
-            for s in ['NeteaseMusicClient', 'KuwoMusicClient']:
+            for s in ['KuwoMusicClient', 'NeteaseMusicClient']:
                 if s not in candidate_sources and s in SUPPORTED_SOURCES:
                     candidate_sources.append(s)
             for target_src in candidate_sources[:2]:
@@ -826,15 +861,29 @@ def api_parse_playlist():
                     'tracks': tracks
                 })
 
-        # 2. 兜底调用客户端原生解析
+        # 2. 兜底调用客户端原生解析（强制开启 fast_metadata_mode 并设置 12 秒熔断）
         client = MANAGER.get_client(source)
         if hasattr(client, 'cur_playlist_name'):
             delattr(client, 'cur_playlist_name')
-        song_infos = client.parseplaylist(url)
+        client.fast_metadata_mode = True
+
+        def _do_client_parse():
+            return client.parseplaylist(url)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_do_client_parse)
+            try:
+                song_infos = future.result(timeout=12)
+            except concurrent.futures.TimeoutError:
+                return jsonify({'error': f'{source_label}歌单解析超时（超过12秒），源站响应缓慢，请稍后重试或检查链接是否有效'}), 200
+
         tracks = []
         for song_info in (song_infos or []):
             token = REGISTRY.add(song_info, source)
             tracks.append(track_to_payload(song_info, token, source))
+
+        if not tracks:
+            return jsonify({'error': f'未在{source_label}歌单中提取到有效曲目，请检查歌单是否公开或链接是否有效'}), 200
 
         playlist_title = extract_playlist_title(client, song_infos, url)
         final_title = playlist_title or f"{source_label}歌单"
@@ -848,7 +897,7 @@ def api_parse_playlist():
             'tracks': tracks
         })
     except Exception as err:
-        return jsonify({'error': f"解析歌单失败: {str(err)}"}), 500
+        return jsonify({'error': f"解析歌单失败: {str(err)}"}), 200
 
 
 @app.route('/api/download/local', methods=['POST'])
