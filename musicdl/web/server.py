@@ -19,6 +19,8 @@ import html
 import requests
 import json_repair
 import concurrent.futures
+import socket
+import subprocess
 from pathlib import Path
 from flask import Flask, request, Response, jsonify, send_from_directory, stream_with_context, redirect
 
@@ -96,6 +98,7 @@ REGISTRY_CACHE_FILE = os.path.join(DOWNLOAD_DIR, '.track_registry.json')
 class TrackRegistry:
     def __init__(self, cache_file=REGISTRY_CACHE_FILE):
         self._lock = threading.Lock()
+        self._save_lock = threading.Lock()
         self._tracks = {}
         self.cache_file = cache_file
         self._load_cache()
@@ -122,33 +125,44 @@ class TrackRegistry:
             pass
 
     def _save_cache(self):
+        threading.Thread(target=self._save_cache_worker, daemon=True).start()
+
+    def _save_cache_worker(self):
+        if not self._save_lock.acquire(blocking=False):
+            return
         try:
-            data = {}
-            for token, item in self._tracks.items():
-                song = item['song_info']
-                song_dict = {
-                    'song_name': getattr(song, 'song_name', ''),
-                    'singers': getattr(song, 'singers', ''),
-                    'album': getattr(song, 'album', ''),
-                    'duration': getattr(song, 'duration', ''),
-                    'file_size': getattr(song, 'file_size', ''),
-                    'ext': getattr(song, 'ext', 'mp3'),
-                    'download_url': getattr(song, 'download_url', ''),
-                    'lyric': getattr(song, 'lyric', ''),
-                    'cover_url': getattr(song, 'cover_url', ''),
-                    'source': getattr(song, 'source', item.get('source', '')),
-                }
-                data[token] = {
-                    'song_info': song_dict,
-                    'source': item['source'],
-                    'headers': item['headers'],
-                    'cookies': item['cookies'],
-                    'created_at': item['created_at'],
-                }
-            with open(self.cache_file, 'w', encoding='utf-8') as f:
+            with self._lock:
+                items = list(self._tracks.items())[-2000:]
+                data = {}
+                for token, item in items:
+                    song = item['song_info']
+                    song_dict = {
+                        'song_name': getattr(song, 'song_name', ''),
+                        'singers': getattr(song, 'singers', ''),
+                        'album': getattr(song, 'album', ''),
+                        'duration': getattr(song, 'duration', ''),
+                        'file_size': getattr(song, 'file_size', ''),
+                        'ext': getattr(song, 'ext', 'mp3'),
+                        'download_url': getattr(song, 'download_url', ''),
+                        'lyric': getattr(song, 'lyric', ''),
+                        'cover_url': getattr(song, 'cover_url', ''),
+                        'source': getattr(song, 'source', item.get('source', '')),
+                    }
+                    data[token] = {
+                        'song_info': song_dict,
+                        'source': item['source'],
+                        'headers': item['headers'],
+                        'cookies': item['cookies'],
+                        'created_at': item['created_at'],
+                    }
+            tmp_file = f"{self.cache_file}.tmp_{os.getpid()}"
+            with open(tmp_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False)
+            os.replace(tmp_file, self.cache_file)
         except Exception:
             pass
+        finally:
+            self._save_lock.release()
 
     def add(self, song_info: SongInfo, source: str) -> str:
         token = uuid.uuid4().hex[:16]
@@ -166,8 +180,37 @@ class TrackRegistry:
                 'cookies': cookies,
                 'created_at': time.time(),
             }
-            self._save_cache()
+        self._save_cache()
         return token
+
+    def add_batch(self, items: list) -> list:
+        """批量注册曲目：内存毫秒级就绪，后台线程异步持久化，彻底消除磁盘IO阻塞"""
+        tokens = []
+        client_cache = {}
+        with self._lock:
+            for song_info, source in items:
+                token = uuid.uuid4().hex[:16]
+                if source not in client_cache:
+                    client = MANAGER.get_client(source)
+                    client_cache[source] = (
+                        dict(getattr(client, 'default_download_headers', {}) or {}),
+                        dict(getattr(client, 'default_download_cookies', {}) or {})
+                    )
+                c_headers, c_cookies = client_cache[source]
+                headers = dict(c_headers)
+                headers.update(dict(getattr(song_info, 'default_download_headers', {}) or {}))
+                cookies = dict(c_cookies)
+                cookies.update(dict(getattr(song_info, 'default_download_cookies', {}) or {}))
+                self._tracks[token] = {
+                    'song_info': song_info,
+                    'source': source,
+                    'headers': headers,
+                    'cookies': cookies,
+                    'created_at': time.time(),
+                }
+                tokens.append(token)
+        self._save_cache()
+        return tokens
 
     def get(self, token: str):
         with self._lock:
@@ -294,7 +337,7 @@ def track_to_payload(song_info: SongInfo, token: str, source: str) -> dict:
         'quality_type': q['quality_type'],
         'quality_label': q['quality_label'],
         'identifier': str(getattr(song_info, 'identifier', '') or ''),
-        'cover_url': f'/api/cover/{token}' if getattr(song_info, 'cover_url', None) else '',
+        'cover_url': f'/api/cover/{token}',
         'has_lyric': has_lyric,
         'lyric': lyric_str,
         'download_url': f'/api/stream/{token}?download=1',
@@ -727,8 +770,48 @@ def clean_music_query(song_name, singers=''):
     return s_name, clean_singer
 
 
-def resolve_by_qq_search(song_name, singers=''):
-    """通过 QQ 音乐官方移动端检索对齐 mid，精准获取正品直链"""
+def compute_match_score(song_name, singers, album, cand_name, cand_singers, cand_album=''):
+    """计算候选曲目与目标歌单曲目的综合匹配度评分 (0-100)"""
+    # 1. 歌手一票否决：若歌手完全对不上，直接 0 分，杜绝翻唱
+    if not is_singer_match(singers, cand_singers, song_name, cand_name):
+        return 0
+
+    score = 50.0
+
+    # 2. 歌名相似度 (0-30分)
+    clean_target = re.sub(r'[\(\[\{（【].*?[\)\]\}）】]', '', str(song_name or '')).strip().lower()
+    clean_cand = re.sub(r'[\(\[\{（【].*?[\)\]\}）】]', '', str(cand_name or '')).strip().lower()
+    if clean_target == clean_cand:
+        score += 30
+    elif clean_target in clean_cand or clean_cand in clean_target:
+        score += 20
+    else:
+        score += 10
+
+    # 3. 伴奏/Live 反偏惩罚 (-25 ~ -40分)
+    target_lower = str(song_name or '').lower()
+    cand_lower = str(cand_name or '').lower()
+    if 'live' not in target_lower and '现场' not in target_lower and '演唱会' not in target_lower:
+        if 'live' in cand_lower or '现场' in cand_lower or '演唱会' in cand_lower:
+            score -= 25
+    if '伴奏' not in target_lower and 'instrumental' not in target_lower:
+        if '伴奏' in cand_lower or 'instrumental' in cand_lower:
+            score -= 40
+
+    # 4. 专辑严格对齐加分 (0-20分)
+    if album and cand_album:
+        a1 = str(album).strip().lower()
+        a2 = str(cand_album).strip().lower()
+        if a1 == a2:
+            score += 20
+        elif a1 in a2 or a2 in a1:
+            score += 10
+
+    return max(0, score)
+
+
+def resolve_by_qq_search(song_name, singers='', album=''):
+    """通过 QQ 音乐官方移动端检索对齐 mid，按匹配度最高算法获取正品直链"""
     if not song_name:
         return None
     s_name, c_singer = clean_music_query(song_name, singers)
@@ -739,25 +822,86 @@ def resolve_by_qq_search(song_name, singers=''):
         "music.search.SearchCgiService.DoSearchForQQMusicMobile": {
             "method": "DoSearchForQQMusicMobile",
             "module": "music.search.SearchCgiService",
-            "param": {"search_type": 0, "query": query, "page_num": 1, "num_per_page": 5}
+            "param": {"search_type": 0, "query": query, "page_num": 1, "num_per_page": 8}
         }
     }
     try:
         r = requests.post(url, json=payload, timeout=(3, 5)).json()
         items = safe_dict_extract(r, ["music.search.SearchCgiService.DoSearchForQQMusicMobile", "data", "body", "item_song"], [])
+        candidates = []
         for item in (items or []):
             cand_name = str(item.get("title", "")).replace("<em>", "").replace("</em>", "")
             cand_singers = [s.get("name") for s in (item.get("singer", []) or []) if isinstance(s, dict) and s.get("name")]
-            if not is_singer_match(singers, cand_singers, song_name, cand_name):
-                continue
+            cand_album = str(safe_dict_extract(item, ["album", "name"], "") or item.get("albumname") or "")
+            score = compute_match_score(song_name, singers, album, cand_name, cand_singers, cand_album)
             mid = item.get("mid")
-            if mid:
-                u = resolve_qq_fast_url(mid)
-                if u:
-                    return u
+            if score > 0 and mid:
+                candidates.append((score, mid))
+
+        # 按匹配度从高到低排序，优先取匹配度最高的一首
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        for score, mid in candidates:
+            u = resolve_qq_fast_url(mid)
+            if u:
+                return u
     except Exception:
         pass
     return None
+
+
+def resolve_fast_cover(song_name, singers='', identifier='', album=''):
+    """极速对齐获取歌曲的 300x300 原厂官方高清专辑封面"""
+    if not song_name:
+        return ''
+
+    # 1. 若有网易云纯数字 ID，直接调用网易云详情接口获取官方高清封面
+    if identifier and str(identifier).isdigit():
+        try:
+            r = requests.get(f'http://music.163.com/api/song/detail/?id={identifier}&ids=[{identifier}]', timeout=(2, 3)).json()
+            songs = r.get('songs', [])
+            if songs:
+                pic = songs[0].get('album', {}).get('picUrl')
+                if pic and str(pic).startswith('http'):
+                    return str(pic)
+        except Exception:
+            pass
+
+    # 2. 通过 QQ 音乐极速检索匹配专辑 mid，拼接原厂官方 300x300 高清图
+    s_name, c_singer = clean_music_query(song_name, singers)
+    query = f"{s_name} {c_singer}".strip() if c_singer else s_name
+    url = "https://u.y.qq.com/cgi-bin/musicu.fcg"
+    payload = {
+        "comm": {"ct": "19", "cv": "1859", "uin": "0"},
+        "music.search.SearchCgiService.DoSearchForQQMusicMobile": {
+            "method": "DoSearchForQQMusicMobile",
+            "module": "music.search.SearchCgiService",
+            "param": {"search_type": 0, "query": query, "page_num": 1, "num_per_page": 3}
+        }
+    }
+    try:
+        r = requests.post(url, json=payload, timeout=(2, 3)).json()
+        items = safe_dict_extract(r, ["music.search.SearchCgiService.DoSearchForQQMusicMobile", "data", "body", "item_song"], [])
+        if items:
+            for item in items:
+                alb_mid = item.get('album', {}).get('mid')
+                if alb_mid and str(alb_mid).strip():
+                    return f"https://y.qq.com/music/photo_new/T002R300x300M000{alb_mid}.jpg"
+    except Exception:
+        pass
+
+    # 3. 通过网易云搜索兜底获取专辑图片
+    try:
+        w_url = f"http://music.163.com/api/search/get/web?s={urllib.parse.quote(query)}&type=1&offset=0&total=true&limit=1"
+        wr = requests.get(w_url, timeout=(2, 3)).json()
+        songs = wr.get('result', {}).get('songs', [])
+        if songs:
+            pic = songs[0].get('album', {}).get('artist', {}).get('img1v1Url')
+            if pic and str(pic).startswith('http'):
+                return str(pic)
+    except Exception:
+        pass
+
+    return ''
 
 
 def resolve_qq_official_lrc(song_mid):
@@ -942,8 +1086,8 @@ def resolve_fast_lrc(song_name, singers='', song_id=None, source=''):
     return ''
 
 
-def resolve_by_netease_search(song_name, singers=''):
-    """通过网易云云搜索获取官方高品质播放直链（严格歌手比对，绝不返回非原唱翻唱）"""
+def resolve_by_netease_search(song_name, singers='', album=''):
+    """通过网易云云搜索获取官方高品质播放直链（按匹配度最高原则精准对齐）"""
     if not song_name:
         return None
     s_name, c_singer = clean_music_query(song_name, singers)
@@ -956,33 +1100,38 @@ def resolve_by_netease_search(song_name, singers=''):
     }
     for q in queries:
         try:
-            sr_url = f"https://music.163.com/api/cloudsearch/pc?s={urllib.parse.quote(q)}&type=1&offset=0&limit=5"
+            sr_url = f"https://music.163.com/api/cloudsearch/pc?s={urllib.parse.quote(q)}&type=1&offset=0&limit=8"
             r = requests.post(sr_url, headers=headers, timeout=(3, 5), verify=False).json()
             songs = safe_dict_extract(r, ['result', 'songs'], [])
+            candidates = []
             for s in (songs or []):
                 cand_name = s.get('name', '')
                 cand_artists = [a.get('name', '') for a in s.get('ar', []) if a.get('name')]
-                # 严格歌手比对：若不是该歌手那一版，坚决跳过，绝不货不对板！
-                if not is_singer_match(singers, cand_artists, song_name, cand_name):
-                    continue
+                cand_album = s.get('al', {}).get('name', '') if isinstance(s.get('al'), dict) else ''
+                score = compute_match_score(song_name, singers, album, cand_name, cand_artists, cand_album)
                 sid = s.get('id')
-                if sid:
-                    url = resolve_netease_direct_url(sid)
-                    if url:
-                        return url
+                if score > 0 and sid:
+                    candidates.append((score, sid))
+
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            for score, sid in candidates:
+                url = resolve_netease_direct_url(sid)
+                if url:
+                    return url
         except Exception:
             continue
     return None
 
 
 def resolve_instant_stream(song, entry):
-    """按平台精准定位直链：原歌单平台优先直达，对应歌手严格对齐，绝不货不对板"""
+    """按平台精准定位直链：原歌单平台优先直达，对应歌手与专辑严格对齐，最高匹配度解析"""
     url = getattr(song, 'download_url', None)
     if url and str(url).startswith('http'):
         return url
 
     raw_search = getattr(song, 'raw_data', {}).get('search', {}) if hasattr(song, 'raw_data') else {}
     source = entry.get('source', '') or getattr(song, 'source', '')
+    song_album = getattr(song, 'album', '') or ''
 
     # 1.【歌单平台绝对优先】若歌单来自 QQ 音乐，100% 直奔 QQ 音乐官方原版直通！
     if source == 'QQMusicClient' or 'qq' in str(source).lower():
@@ -992,8 +1141,8 @@ def resolve_instant_stream(song, entry):
             if url:
                 song.download_url = url
                 return url
-        # 自带 mid 遇到偶发抖动或无有效 mid 时，在 QQ 音乐本源平台内进行歌手严格对齐搜索直连
-        url = resolve_by_qq_search(song.song_name, song.singers)
+        # 自带 mid 遇到偶发抖动或无有效 mid 时，在 QQ 音乐本源平台内进行匹配度最高对齐直连
+        url = resolve_by_qq_search(song.song_name, song.singers, album=song_album)
         if url:
             song.download_url = url
             return url
@@ -1006,6 +1155,10 @@ def resolve_instant_stream(song, entry):
             if url:
                 song.download_url = url
                 return url
+        url = resolve_by_netease_search(song.song_name, song.singers, album=song_album)
+        if url:
+            song.download_url = url
+            return url
 
     # 3.【歌单平台绝对优先】若歌单来自酷我音乐，直接按酷我官方解析！
     if source == 'KuwoMusicClient' or 'kuwo' in str(source).lower():
@@ -1016,12 +1169,12 @@ def resolve_instant_stream(song, entry):
             return url
 
     # 4. 跨平台兜底（仅在原平台未解析出直链时）：严格同歌手正版对齐，绝不拿翻唱充数！
-    url = resolve_by_netease_search(song.song_name, song.singers)
+    url = resolve_by_netease_search(song.song_name, song.singers, album=song_album)
     if url:
         song.download_url = url
         return url
 
-    url = resolve_by_qq_search(song.song_name, song.singers)
+    url = resolve_by_qq_search(song.song_name, song.singers, album=song_album)
     if url:
         song.download_url = url
         return url
@@ -1064,7 +1217,6 @@ def api_stream(token):
         else:
             orig_ext = 'mp3'
     song.ext = orig_ext
-    REGISTRY._save_cache()
 
     # 在线试听：直接 302 重定向至 CDN，让浏览器原生硬解流式播放，彻底免除反代二次中转缓冲、避免 WSGI chunked 协议冲突与海外地域封锁！
     if not is_download and not embed_lyric and target_format in {'', 'original'}:
@@ -1162,19 +1314,43 @@ def api_stream(token):
 @app.route('/api/cover/<token>')
 def api_cover(token):
     entry = REGISTRY.get(token)
-    if not entry:
+    song = entry['song_info'] if entry else None
+
+    url = getattr(song, 'cover_url', None) if song else None
+    if (not url or not str(url).startswith('http')) and song:
+        s_name = getattr(song, 'song_name', '')
+        s_singers = getattr(song, 'singers', '')
+        s_id = getattr(song, 'identifier', '')
+        s_album = getattr(song, 'album', '')
+        url = resolve_fast_cover(s_name, s_singers, s_id, s_album)
+        if url:
+            song.cover_url = url
+            REGISTRY._save_cache()
+
+    if not url or not str(url).startswith('http'):
         return '', 404
-    url = getattr(entry['song_info'], 'cover_url', None)
-    if not isinstance(url, str) or not url.startswith('http'):
-        return '', 404
+
+    # 规范反盗链 Referer 请求头
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+    }
+    if 'qq.com' in url:
+        headers['Referer'] = 'https://y.qq.com/'
+    elif '126.net' in url or '163.com' in url:
+        headers['Referer'] = 'https://music.163.com/'
+    elif 'kuwo.cn' in url:
+        headers['Referer'] = 'http://www.kuwo.cn/'
+
     try:
-        up = requests.get(url, headers={'User-Agent': entry['headers'].get('User-Agent', 'Mozilla/5.0')},
-                          timeout=(10, 20), verify=False)
-        return Response(up.content, status=up.status_code,
-                        headers={'Content-Type': up.headers.get('Content-Type', 'image/jpeg'),
-                                 'Cache-Control': 'public, max-age=86400'})
+        up = requests.get(url, headers=headers, timeout=(4, 8), verify=False)
+        if up.status_code == 200 and up.content:
+            return Response(up.content, status=200,
+                            headers={'Content-Type': up.headers.get('Content-Type', 'image/jpeg'),
+                                     'Cache-Control': 'public, max-age=86400'})
+        return redirect(url, code=302)
     except Exception:
-        return '', 502
+        return redirect(url, code=302)
 
 
 @app.route('/api/lyric/<token>')
@@ -1454,6 +1630,263 @@ def api_parse_playlist():
         return jsonify({'error': f"解析歌单失败: {str(err)}"}), 200
 
 
+@app.route('/api/playlist/activate', methods=['POST'])
+def api_activate_playlist():
+    """纯元数据秒级激活载入：接收歌单的歌名、歌手、专辑、平台等元数据，瞬间注册会话并在主页展示区呈现"""
+    data = request.get_json(silent=True) or {}
+    raw_tracks = data.get('tracks') or []
+    if not isinstance(raw_tracks, list) or not raw_tracks:
+        return jsonify({'error': '无效的歌单曲目数据'}), 400
+
+    activated_tracks = []
+    song_info_list = []
+    for t in raw_tracks:
+        song_name = str(t.get('song_name') or '未知曲目').strip()
+        singers = str(t.get('singers') or '未知歌手').strip()
+        album = str(t.get('album') or '').strip()
+        source = str(t.get('source') or 'QQMusicClient').strip()
+        identifier = str(t.get('identifier') or '').strip()
+        duration = str(t.get('duration') or '00:00').strip()
+        cover_url = str(t.get('cover_url') or '').strip()
+        ext = str(t.get('ext') or '').strip()
+
+        # 构建轻量级 SongInfo，绝不预先发起任何耗时的网络直链请求，0 毫秒完成！
+        song_info = SongInfo(
+            source=source,
+            raw_data={
+                'search': {
+                    'songname': song_name,
+                    'singers': singers,
+                    'album': album,
+                    'mid': identifier,
+                    'songmid': identifier,
+                    'songid': identifier,
+                    'cover_url': cover_url,
+                    'duration': duration,
+                },
+                'download': {},
+                'lyric': {}
+            }
+        )
+        song_info.identifier = identifier
+        song_info.song_name = song_name
+        song_info.singers = singers
+        song_info.album = album
+        song_info.duration = duration
+        if cover_url:
+            song_info.cover_url = cover_url
+        if ext and ext.lower() not in {'none', 'null'}:
+            song_info.ext = ext
+
+        song_info_list.append((song_info, source))
+
+    tokens = REGISTRY.add_batch(song_info_list)
+    activated_tracks = [
+        track_to_payload(song_info, token, source)
+        for (song_info, source), token in zip(song_info_list, tokens)
+    ]
+
+    return jsonify({
+        'count': len(activated_tracks),
+        'tracks': activated_tracks
+    })
+
+
+# Temporary in-memory sync cache for QR cross-device migration (TTL: 15 mins)
+SYNC_STORE = {}
+SYNC_STORE_LOCK = threading.Lock()
+
+def clean_expired_sync_sessions():
+    now = time.time()
+    with SYNC_STORE_LOCK:
+        expired = [k for k, v in SYNC_STORE.items() if now - v.get('created_at', 0) > 900]
+        for k in expired:
+            SYNC_STORE.pop(k, None)
+
+
+DEFAULT_SERVER_DOMAIN = os.environ.get('MUSICDL_DOMAIN', 'music.dbas.fun').strip()
+
+
+def get_real_lan_ip():
+    """获取本机物理无线网卡/以太网的真实局域网 IP，智能排除 VPN/TUN/TAP 虚拟网卡"""
+    # 0. 优先支持环境变量显式指定
+    env_lan_ip = os.environ.get('MUSICDL_LAN_IP', '').strip()
+    if env_lan_ip:
+        return env_lan_ip
+
+    # 1. Windows 下通过 ipconfig 深度解析真实的物理 WLAN 或 Ethernet 适配器 IP
+    if os.name == 'nt':
+        try:
+            out = subprocess.check_output('ipconfig', shell=True).decode('gbk', errors='ignore')
+            current_adapter = ''
+            wlan_ip = None
+            eth_ip = None
+            other_ips = []
+            for line in out.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if ':' in line and not line.startswith(('IPv4', 'Subnet', 'Default', '子网', '默认', '本地', '临时', '连接')):
+                    current_adapter = line
+                if 'IPv4' in line:
+                    ip_match = re.search(r'(\d+\.\d+\.\d+\.\d+)', line)
+                    if ip_match:
+                        ip = ip_match.group(1)
+                        if ip.startswith('127.'):
+                            continue
+                        adapter_lower = current_adapter.lower()
+                        # 过滤常见的代理与虚拟网卡 (singbox_tun, clash, tap-windows, vethernet, tailscale, zerotier 等)
+                        if any(v in adapter_lower for v in ('tun', 'tap', 'vpn', 'vethernet', 'tailscale', 'zerotier', 'hyper-v', 'wsl')):
+                            continue
+                        if any(w in adapter_lower for w in ('wlan', '无线', 'wi-fi', 'wifi')):
+                            wlan_ip = ip
+                        elif any(e in adapter_lower for e in ('以太', 'ethernet')):
+                            eth_ip = ip
+                        else:
+                            other_ips.append(ip)
+            if wlan_ip:
+                return wlan_ip
+            if eth_ip:
+                return eth_ip
+            if other_ips:
+                return other_ips[0]
+        except Exception:
+            pass
+
+    # 2. Linux / macOS 或通用 socket 探测 (排除 TUN 常见网段)
+    for target in [('223.5.5.5', 80), ('10.255.255.255', 1), ('8.8.8.8', 80)]:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(0.5)
+            s.connect(target)
+            ip = s.getsockname()[0]
+            s.close()
+            if ip and not ip.startswith('127.') and not ip.startswith('172.18.'):
+                return ip
+        except Exception:
+            continue
+    try:
+        hostname = socket.gethostname()
+        for ip in socket.gethostbyname_ex(hostname)[2]:
+            if not ip.startswith('127.') and ':' not in ip and not ip.startswith('172.18.'):
+                return ip
+    except Exception:
+        pass
+    return '172.20.10.6'
+
+
+def is_ip_address(host_str):
+    """判断字符串是否为纯 IPv4 地址"""
+    parts = host_str.split('.')
+    if len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
+        return True
+    return False
+
+
+def resolve_sync_endpoint(req):
+    """
+    根据运行环境与访问特征全自动智能研判当前环境，生成唯一确定的同步 URL：
+    - 绝无人工切换选项，彻底防呆
+    - 云端部署/域名访问 -> 云端服务器二维码 (music.dbas.fun)
+    - 本地/局域网访问 -> 局域网物理 IP 二维码 (172.20.10.6:5050)
+    """
+    raw_host = (req.headers.get('X-Forwarded-Host') or req.host or '127.0.0.1:5050').strip()
+    scheme = req.headers.get('X-Forwarded-Proto') or req.scheme or 'http'
+
+    if ':' in raw_host:
+        host_name, port_str = raw_host.split(':', 1)
+        port = f":{port_str}"
+    else:
+        host_name = raw_host
+        port = ''
+
+    # 1. 判断是否处于云端服务器环境
+    env_deploy = (os.environ.get('MUSICDL_ENV', '') or os.environ.get('MUSICDL_DEPLOY', '')).lower()
+    is_cloud_server = (
+        env_deploy in ('server', 'production', 'cloud') or
+        'music.dbas.fun' in host_name or
+        'dbas.fun' in host_name or
+        (not is_ip_address(host_name) and host_name not in ('localhost', '0.0.0.0', '::1'))
+    )
+
+    if is_cloud_server:
+        # 处于云端服务器环境
+        if not is_ip_address(host_name) and host_name not in ('localhost', '0.0.0.0'):
+            base_url = f"{scheme}://{raw_host}"
+            display_domain = raw_host
+        else:
+            server_domain = os.environ.get('MUSICDL_EXTERNAL_URL', '').strip() or DEFAULT_SERVER_DOMAIN
+            if not server_domain.startswith(('http://', 'https://')):
+                base_url = f"https://{server_domain}" if ('https' in scheme or ':443' in port) else f"http://{server_domain}"
+                display_domain = server_domain
+            else:
+                base_url = server_domain.rstrip('/')
+                display_domain = urllib.parse.urlparse(base_url).netloc or server_domain
+        return {
+            'env_type': 'server',
+            'base_url': base_url,
+            'badge_text': f"☁️ 云端同步 ({display_domain})",
+            'sub_text': '已连接云端服务器，支持任意移动设备扫码'
+        }
+
+    # 2. 处于本地局域网环境
+    lan_ip = get_real_lan_ip()
+    actual_port = port or ':5050'
+    lan_url = f"http://{lan_ip}{actual_port}"
+    return {
+        'env_type': 'lan',
+        'base_url': lan_url,
+        'badge_text': f"🌐 局域网同步 ({lan_ip}{actual_port})",
+        'sub_text': '手机连接同一 WiFi 即可扫码秒级自动合并'
+    }
+
+
+@app.route('/api/sync/create', methods=['POST'])
+def api_sync_create():
+    """将歌单与配置临时注册到服务端内存生成简短同步码，用于二维码毫秒级跨设备迁移"""
+    data = request.get_json(silent=True) or {}
+    if not data:
+        return jsonify({'error': '无效的配置数据'}), 400
+
+    clean_expired_sync_sessions()
+    token = uuid.uuid4().hex[:12]
+    with SYNC_STORE_LOCK:
+        SYNC_STORE[token] = {
+            'data': data,
+            'created_at': time.time()
+        }
+
+    endpoint_info = resolve_sync_endpoint(request)
+    sync_url = f"{endpoint_info['base_url'].rstrip('/')}/#sync={token}"
+
+    return jsonify({
+        'success': True,
+        'token': token,
+        'expires_in': 900,
+        'sync_url': sync_url,
+        'base_url': endpoint_info['base_url'],
+        'env_type': endpoint_info['env_type'],
+        'badge_text': endpoint_info['badge_text'],
+        'sub_text': endpoint_info['sub_text']
+    })
+
+
+@app.route('/api/sync/get/<token>', methods=['GET'])
+def api_sync_get(token):
+    """跨端设备通过短 token 快速拉取完整配置与歌单"""
+    clean_expired_sync_sessions()
+    with SYNC_STORE_LOCK:
+        entry = SYNC_STORE.get(token)
+
+    if not entry:
+        return jsonify({'error': '该配置同步码已过期或不存在'}), 404
+
+    return jsonify({
+        'success': True,
+        'data': entry['data']
+    })
+
+
 @app.route('/api/download/local', methods=['POST'])
 def api_download_local():
     data = request.get_json(silent=True) or {}
@@ -1496,6 +1929,9 @@ def api_track_resolve():
             download_url=direct_url
         )
         new_song.ext = 'mp3'
+        new_cover = resolve_fast_cover(song_name, singers)
+        if new_cover:
+            new_song.cover_url = new_cover
         new_token = REGISTRY.add(new_song, new_song.source)
         payload = track_to_payload(new_song, new_token, new_song.source)
         return jsonify({'success': True, 'track': payload})

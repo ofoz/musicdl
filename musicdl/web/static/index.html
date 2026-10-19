@@ -40,7 +40,7 @@
       <div class="hidden sm:flex flex-1 items-center justify-center">
         <div class="flex items-center bg-slate-100/90 p-1 rounded-xl border border-slate-200/80 text-sm shadow-inner">
           <button id="tabSearchBtn" class="tab-btn active px-4 py-1.5 rounded-lg font-medium transition-all whitespace-nowrap text-center">单曲聚合搜索</button>
-          <button id="tabPlaylistBtn" class="tab-btn px-4 py-1.5 rounded-lg font-medium transition-all text-slate-500 hover:text-slate-800 whitespace-nowrap text-center">歌单批量解析</button>
+          <button id="tabPlaylistBtn" class="hidden tab-btn px-4 py-1.5 rounded-lg font-medium transition-all text-slate-500 hover:text-slate-800 whitespace-nowrap text-center">歌单批量解析</button>
         </div>
       </div>
 
@@ -82,13 +82,13 @@
       <div class="relative max-w-3xl mx-auto">
         <div class="relative flex items-center">
           <input type="text" id="searchInput" placeholder="搜索歌曲名、歌手、专辑 (例如: 周杰伦 / 晴天 / 孤勇者)..." 
-                 class="w-full bg-white border border-slate-200 rounded-2xl py-3.5 pl-12 pr-28 text-base text-slate-800 placeholder-slate-400 focus:outline-none focus:border-emerald-400 focus:ring-4 focus:ring-emerald-400/15 shadow-sm transition-all">
+                 class="w-full bg-white border border-slate-200 rounded-2xl py-3.5 pl-12 pr-32 sm:pr-36 text-base text-slate-800 placeholder-slate-400 focus:outline-none focus:border-emerald-400 focus:ring-4 focus:ring-emerald-400/15 shadow-sm transition-all">
           <div class="absolute left-4 text-emerald-600/70">
             <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
             </svg>
           </div>
-          <button id="searchBtn" class="absolute right-2 px-5 py-2 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 font-medium text-sm rounded-xl text-white shadow-md shadow-emerald-500/25 transition-all flex items-center gap-1.5">
+          <button id="searchBtn" class="absolute right-1.5 sm:right-2 px-3.5 sm:px-5 py-2 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 font-medium text-sm rounded-xl text-white shadow-md shadow-emerald-500/25 transition-all flex items-center gap-1.5 select-none whitespace-nowrap">
             <span>搜索</span>
           </button>
         </div>
@@ -129,9 +129,9 @@
         </div>
       </div>
 
-      <!-- 状态指示栏 (纯粹呈现检索结果数量，去除具体平台展示) -->
-      <div id="statusBar" class="flex items-center justify-between text-xs text-slate-500 px-2 min-h-[24px]">
-        <div id="statusText" class="font-medium text-slate-600">准备就绪，请输入关键词开始搜索</div>
+      <!-- 状态指示栏 (完全隐藏，检索状态由搜索按钮直接呈现) -->
+      <div id="statusBar" class="hidden">
+        <div id="statusText"></div>
       </div>
 
       <!-- 搜索结果列表 (纯白玉脂卡片) -->
@@ -459,21 +459,39 @@
           </div>
         </div>
 
-        <!-- 跨设备备份与导出按钮群 (移动端精简防挤压) -->
-        <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
-          <button id="exportConfigBtn" class="flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100/80 border border-emerald-200 text-emerald-700 text-xs font-medium transition whitespace-nowrap shrink-0" title="将所有歌单与配置导出为本地 .json 备份文件">
+        <!-- 跨设备备份与导出按钮群 (PC端与移动端按需精简呈现) -->
+        <div class="flex items-center gap-1 sm:gap-1.5 shrink-0">
+          <!-- PC 端专属：二维码导出 (移动端隐藏) -->
+          <button id="exportQrConfigBtn" class="hidden sm:flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-xs transition whitespace-nowrap shrink-0" title="生成跨端同步二维码，手机扫码即可秒级同步歌单">
+            <svg class="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
+            </svg>
+            <span>二维码导出</span>
+          </button>
+
+          <!-- 移动端专属：扫码恢复 (PC端隐藏) -->
+          <button id="scanQrConfigBtn" class="flex sm:hidden items-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100/80 border border-emerald-200 text-emerald-800 text-xs font-medium transition whitespace-nowrap shrink-0" title="扫码恢复配置与歌单">
+            <svg class="w-3.5 h-3.5 shrink-0 text-emerald-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            <span>扫码恢复</span>
+          </button>
+
+          <!-- PC 端专属：文件导出 (移动端隐藏) -->
+          <button id="exportConfigBtn" class="hidden sm:flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 text-xs font-medium transition whitespace-nowrap shrink-0" title="导出 .json 备份文件">
             <svg class="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
             </svg>
-            <span class="sm:inline hidden">一键导出备份</span>
-            <span class="sm:hidden">导出</span>
+            <span>文件导出</span>
           </button>
 
-          <button id="importConfigTriggerBtn" class="flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 text-xs font-medium transition whitespace-nowrap shrink-0" title="从本地 .json 备份文件中恢复歌单">
+          <!-- 通用：文件导入 (PC端与移动端均保留) -->
+          <button id="importConfigTriggerBtn" class="flex items-center gap-1 px-2.5 sm:px-2.5 py-1.5 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 text-xs font-medium transition whitespace-nowrap shrink-0" title="从本地 .json 文件恢复">
             <svg class="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
             </svg>
-            <span class="sm:inline hidden">导入恢复配置</span>
+            <span class="sm:inline hidden">文件导入</span>
             <span class="sm:hidden">导入</span>
           </button>
           <input type="file" id="importConfigFileInput" accept=".json" class="hidden">
@@ -549,6 +567,123 @@
 
       </div>
 
+    </div>
+  </div>
+
+  <!-- 二维码配置导出模态框 -->
+  <div id="qrExportModal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-6 hidden">
+    <div class="bg-white border border-slate-200/90 w-full max-w-sm rounded-2xl shadow-2xl p-5 sm:p-6 flex flex-col items-center text-slate-800 space-y-4">
+      <div class="w-full flex items-center justify-between border-b border-slate-100 pb-3">
+        <div class="flex items-center gap-2">
+          <div class="w-7 h-7 rounded-lg bg-emerald-100/70 border border-emerald-200 flex items-center justify-center text-emerald-700">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
+            </svg>
+          </div>
+          <h3 class="text-sm sm:text-base font-bold text-slate-800">歌单与配置二维码</h3>
+        </div>
+        <button id="closeQrExportModalBtn" class="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition" title="关闭">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <!-- 运行环境自适应指示徽标 (服务端全自动判定，彻底防呆) -->
+      <div class="flex items-center justify-center pt-0.5">
+        <div id="qrExportNetBadge" class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-2xs">
+          <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span id="qrExportNetBadgeText">正在分析运行环境...</span>
+        </div>
+      </div>
+
+      <!-- 二维码画布容器 -->
+      <div class="p-3 bg-white border border-slate-200 rounded-2xl shadow-inner flex items-center justify-center">
+        <div id="qrExportCanvasWrapper" class="w-56 h-56 flex items-center justify-center overflow-hidden bg-white">
+          <!-- 由 qrcode.js 动态渲染 canvas/img -->
+        </div>
+      </div>
+
+      <div class="text-center space-y-1">
+        <p id="qrExportSummaryText" class="text-xs font-semibold text-slate-700">正在生成配置数据...</p>
+        <p id="qrExportSubText" class="text-[11px] text-slate-400">手机相机或微信扫码打开，秒级自动合并歌单</p>
+      </div>
+
+      <!-- 操作按钮群 -->
+      <div class="w-full grid grid-cols-2 gap-2 pt-1">
+        <button id="downloadQrImgBtn" class="w-full py-2 px-3 rounded-xl bg-emerald-50 hover:bg-emerald-100/80 border border-emerald-200 text-emerald-700 text-xs font-medium transition flex items-center justify-center gap-1.5">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          <span>保存图片</span>
+        </button>
+        <button id="copyQrCodeTextBtn" class="w-full py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 text-xs font-medium transition flex items-center justify-center gap-1.5" title="复制包含同步码的直接访问链接">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/></svg>
+          <span>复制同步链接</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 扫码恢复配置模态框 -->
+  <div id="qrScanModal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-6 hidden">
+    <div class="bg-white border border-slate-200/90 w-full max-w-sm rounded-2xl shadow-2xl p-5 sm:p-6 flex flex-col text-slate-800 space-y-3.5">
+      <div class="w-full flex items-center justify-between border-b border-slate-100 pb-3">
+        <div class="flex items-center gap-2">
+          <div class="w-7 h-7 rounded-lg bg-emerald-100/70 border border-emerald-200 flex items-center justify-center text-emerald-700">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </div>
+          <h3 class="text-sm sm:text-base font-bold text-slate-800">扫码恢复配置</h3>
+        </div>
+        <button id="closeQrScanModalBtn" class="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition" title="关闭">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <!-- 视频摄像头扫码视口 -->
+      <div class="relative w-full h-60 bg-slate-900 rounded-xl overflow-hidden flex items-center justify-center">
+        <video id="qrScanVideo" class="w-full h-full object-cover" playsinline autoplay muted></video>
+        <canvas id="qrScanCanvas" class="hidden"></canvas>
+
+        <!-- 扫描框与激光动效 -->
+        <div id="qrScanOverlay" class="absolute inset-0 pointer-events-none flex items-center justify-center">
+          <div class="w-44 h-44 border-2 border-emerald-400/90 rounded-2xl relative shadow-[0_0_0_9999px_rgba(15,23,42,0.45)]">
+            <!-- 四个边角指示 -->
+            <div class="absolute -top-1 -left-1 w-4 h-4 border-t-2 border-l-2 border-emerald-400"></div>
+            <div class="absolute -top-1 -right-1 w-4 h-4 border-t-2 border-r-2 border-emerald-400"></div>
+            <div class="absolute -bottom-1 -left-1 w-4 h-4 border-b-2 border-l-2 border-emerald-400"></div>
+            <div class="absolute -bottom-1 -right-1 w-4 h-4 border-b-2 border-r-2 border-emerald-400"></div>
+            <!-- 绿色扫描激光线 -->
+            <div class="absolute left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-emerald-400 to-transparent shadow-[0_0_8px_#34d399] animate-pulse-line"></div>
+          </div>
+        </div>
+
+        <!-- 摄像头未就绪或未授权提示遮罩 (iOS Safari 非 HTTPS 降级) -->
+        <div id="qrScanPromptMask" class="absolute inset-0 bg-slate-900/95 flex flex-col items-center justify-center p-4 text-center space-y-2.5 hidden">
+          <div class="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
+            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+            </svg>
+          </div>
+          <p id="qrScanPromptText" class="text-xs text-slate-200 leading-relaxed max-w-[240px]">iPhone 在非 HTTPS 局域网下受苹果安全策略限制实时取景，推荐直接用 iPhone 系统相机扫码打开，或点击下方拍照识别</p>
+          <button id="triggerImagePickerBtn" class="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition shadow-xs flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /></svg>
+            <span>拍照 / 相册选图识别</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="text-center space-y-0.5">
+        <p id="qrScanStatusMsg" class="text-xs text-slate-500 font-medium">将摄像头对准另一台屏幕上的配置二维码</p>
+      </div>
+
+      <!-- 底部图片与文本导入兜底 -->
+      <div class="flex items-center gap-2 pt-1 border-t border-slate-100">
+        <button id="pickQrImageBtn" class="flex-1 py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition flex items-center justify-center gap-1.5">
+          <svg class="w-3.5 h-3.5 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+          <span>拍照 / 相册图片识别</span>
+        </button>
+        <input type="file" id="qrImageFileInput" accept="image/*" class="hidden">
+      </div>
     </div>
   </div>
 
@@ -704,6 +839,8 @@
   </div>
 
   <audio id="audioElement" preload="none"></audio>
-  <script src="/static/app.js"></script>
+  <script src="/static/libs/qrcode.min.js"></script>
+  <script src="/static/libs/jsQR.min.js"></script>
+  <script src="/static/app.js?v=20261019_06"></script>
 </body>
 </html>

@@ -19,6 +19,7 @@ const state = {
   isFullscreenOpen: false,
   playMode: 'loop', // 'loop', 'one', 'shuffle'
   predictedNextIndex: -1,
+  tracksSource: 'search', // 'search' or 'playlist'
 };
 
 const STORAGE_KEY_FORMAT = 'musicdl_pref_format';
@@ -150,6 +151,31 @@ const closePlaylistsModalBtn = document.getElementById('closePlaylistsModalBtn')
 const exportConfigBtn = document.getElementById('exportConfigBtn');
 const importConfigTriggerBtn = document.getElementById('importConfigTriggerBtn');
 const importConfigFileInput = document.getElementById('importConfigFileInput');
+const exportQrConfigBtn = document.getElementById('exportQrConfigBtn');
+const scanQrConfigBtn = document.getElementById('scanQrConfigBtn');
+
+// QR Export Modal Elements
+const qrExportModal = document.getElementById('qrExportModal');
+const closeQrExportModalBtn = document.getElementById('closeQrExportModalBtn');
+const qrExportCanvasWrapper = document.getElementById('qrExportCanvasWrapper');
+const qrExportSummaryText = document.getElementById('qrExportSummaryText');
+const qrExportSubText = document.getElementById('qrExportSubText');
+const qrExportNetBadge = document.getElementById('qrExportNetBadge');
+const qrExportNetBadgeText = document.getElementById('qrExportNetBadgeText');
+const downloadQrImgBtn = document.getElementById('downloadQrImgBtn');
+const copyQrCodeTextBtn = document.getElementById('copyQrCodeTextBtn');
+
+// QR Scan Modal Elements
+const qrScanModal = document.getElementById('qrScanModal');
+const closeQrScanModalBtn = document.getElementById('closeQrScanModalBtn');
+const qrScanVideo = document.getElementById('qrScanVideo');
+const qrScanCanvas = document.getElementById('qrScanCanvas');
+const qrScanPromptMask = document.getElementById('qrScanPromptMask');
+const qrScanPromptText = document.getElementById('qrScanPromptText');
+const triggerImagePickerBtn = document.getElementById('triggerImagePickerBtn');
+const qrScanStatusMsg = document.getElementById('qrScanStatusMsg');
+const pickQrImageBtn = document.getElementById('pickQrImageBtn');
+const qrImageFileInput = document.getElementById('qrImageFileInput');
 const modalPlaylistUrlInput = document.getElementById('modalPlaylistUrlInput');
 const modalPlaylistCustomName = document.getElementById('modalPlaylistCustomName');
 const modalImportPlaylistBtn = document.getElementById('modalImportPlaylistBtn');
@@ -159,6 +185,7 @@ const myPlaylistsCardsContainer = document.getElementById('myPlaylistsCardsConta
 async function init() {
   updateFormatBadge();
   updateMyPlaylistsBadge();
+  checkUrlSyncOnStartup();
 
   try {
     const res = await fetch('/api/sources');
@@ -396,6 +423,10 @@ confirmDownloadBtn.onclick = () => {
 
 function requestDownload(track) {
   if (!track) return;
+  if (track.from_playlist || state.tracksSource === 'playlist') {
+    showToast('歌单载入歌曲仅支持在线畅听');
+    return;
+  }
   const saved = getSavedFormat();
   if (saved) {
     const hasLyric = Boolean(track.has_lyric);
@@ -565,7 +596,53 @@ resetSourcesBtn.onclick = () => {
   renderSourcesPills();
 };
 
-// 4. Streaming Search Logic
+// 4. Streaming Search Logic & Search Button States
+let searchBtnResetTimer = null;
+
+function resetSearchBtn() {
+  if (searchBtnResetTimer) {
+    clearTimeout(searchBtnResetTimer);
+    searchBtnResetTimer = null;
+  }
+  if (!searchBtn) return;
+  searchBtn.innerHTML = `<span>搜索</span>`;
+  searchBtn.classList.remove('opacity-90');
+}
+
+function updateSearchBtnState(stateType, extra) {
+  if (searchBtnResetTimer) {
+    clearTimeout(searchBtnResetTimer);
+    searchBtnResetTimer = null;
+  }
+  if (!searchBtn) return;
+
+  if (stateType === 'idle') {
+    resetSearchBtn();
+  } else if (stateType === 'searching') {
+    const text = extra ? `已找到 ${extra} 首` : '检索中...';
+    searchBtn.innerHTML = `
+      <svg class="animate-spin w-3.5 h-3.5 text-white shrink-0" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+      </svg>
+      <span class="whitespace-nowrap text-xs sm:text-sm font-semibold">${text}</span>
+    `;
+    searchBtn.classList.add('opacity-90');
+  } else if (stateType === 'done') {
+    searchBtn.innerHTML = `
+      <svg class="w-3.5 h-3.5 text-white shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
+      </svg>
+      <span class="whitespace-nowrap text-xs sm:text-sm font-semibold">搜索完成</span>
+    `;
+    searchBtn.classList.remove('opacity-90');
+    // 搜索完成后保持 4 秒，随后自动平滑还原为“搜索”；若用户在此期间输入也会立即恢复
+    searchBtnResetTimer = setTimeout(() => {
+      resetSearchBtn();
+    }, 4000);
+  }
+}
+
 function performSearch() {
   const keyword = searchInput.value.trim();
   if (!keyword) return;
@@ -574,10 +651,14 @@ function performSearch() {
     state.eventSource.close();
   }
 
+  state.tracksSource = 'search';
   state.tracks = [];
   resultsTableBody.innerHTML = '';
   if (sourceChips) sourceChips.innerHTML = '';
-  statusText.innerHTML = `<span class="flex items-center gap-1.5 text-emerald-600 font-medium"><svg class="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg> 正在并发检索曲目中...</span>`;
+  
+  // 状态直观呈现在搜索按钮上
+  updateSearchBtnState('searching', 0);
+  if (statusText) statusText.innerText = '';
 
   const sourcesParam = Array.from(state.activeSources).join(',');
   const url = `/api/search/stream?q=${encodeURIComponent(keyword)}&sources=${encodeURIComponent(sourcesParam)}`;
@@ -591,10 +672,12 @@ function performSearch() {
 
   es.addEventListener('result', (e) => {
     const track = JSON.parse(e.data);
+    track.from_playlist = false;
     state.tracks.push(track);
     totalCount++;
     appendTrackRow(track, totalCount - 1);
-    statusText.innerText = `已检索到 ${totalCount} 首曲目`;
+    // 实时更新：已找到X首
+    updateSearchBtnState('searching', totalCount);
   });
 
   es.addEventListener('source_done', () => {});
@@ -604,7 +687,8 @@ function performSearch() {
   es.addEventListener('done', (e) => {
     es.close();
     state.eventSource = null;
-    statusText.innerText = `搜索完成，共找到 ${totalCount} 首曲目`;
+    // 搜索完成
+    updateSearchBtnState('done', totalCount);
     if (totalCount === 0) {
       resultsTableBody.innerHTML = `<tr><td colspan="7" class="py-12 text-center text-slate-400">未检索到相关曲目，请尝试更换关键词或勾选更多音源</td></tr>`;
     }
@@ -613,7 +697,7 @@ function performSearch() {
   es.onerror = () => {
     es.close();
     state.eventSource = null;
-    statusText.innerText = `搜索完成，共找到 ${totalCount} 首曲目`;
+    updateSearchBtnState('done', totalCount);
   };
 }
 
@@ -697,6 +781,13 @@ function appendTrackRow(track, index) {
   const qualityBadge = `<span class="track-quality-badge inline-flex items-center">${getQualityBadgeHtml(track)}</span>`;
   const lyricBadge = `<span class="track-lyric-badge inline-flex items-center">${getLyricBadgeHtml(track.has_lyric)}</span>`;
 
+  const isFromPlaylist = Boolean(track.from_playlist || state.tracksSource === 'playlist');
+  const downloadBtnHtml = isFromPlaylist ? '' : `
+        <button class="row-download-btn p-1.5 rounded-lg text-slate-400 hover:text-emerald-700 hover:bg-emerald-100/80 transition" title="下载音频">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+        </button>
+  `;
+
   tr.innerHTML = `
     <td class="py-2.5 sm:py-3 px-2 sm:px-3 text-center text-slate-400 text-[11px] sm:text-xs font-mono whitespace-nowrap">${index + 1}</td>
     <td class="py-2.5 sm:py-3 px-3 sm:px-4 font-medium text-slate-800">
@@ -727,9 +818,7 @@ function appendTrackRow(track, index) {
         <button class="play-btn p-1.5 rounded-lg text-slate-400 hover:text-emerald-700 hover:bg-emerald-100/80 transition" title="立即试听">
           <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
         </button>
-        <button class="row-download-btn p-1.5 rounded-lg text-slate-400 hover:text-emerald-700 hover:bg-emerald-100/80 transition" title="下载音频">
-          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-        </button>
+        ${downloadBtnHtml}
       </div>
     </td>
   `;
@@ -740,16 +829,24 @@ function appendTrackRow(track, index) {
     e.stopPropagation();
     playTrack(index);
   };
-  tr.querySelector('.row-download-btn').onclick = (e) => {
-    e.stopPropagation();
-    requestDownload(track);
-  };
+  const rowDlBtn = tr.querySelector('.row-download-btn');
+  if (rowDlBtn) {
+    rowDlBtn.onclick = (e) => {
+      e.stopPropagation();
+      requestDownload(track);
+    };
+  }
 
   resultsTableBody.appendChild(tr);
 }
 
 searchInput.onkeydown = (e) => {
   if (e.key === 'Enter') performSearch();
+};
+searchInput.oninput = () => {
+  if (!state.eventSource) {
+    resetSearchBtn();
+  }
 };
 searchBtn.onclick = performSearch;
 
@@ -780,6 +877,23 @@ function closeFullscreenPlayer() {
   state.isFullscreenOpen = false;
 }
 
+function updatePlayerCover(coverUrl) {
+  const finalCover = coverUrl || 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 60 60%22><rect fill=%22%23e2e8f0%22 width=%2260%22 height=%2260%22/></svg>';
+  if (playerCover) {
+    playerCover.src = finalCover;
+  }
+  if (fsCoverImg) {
+    fsCoverImg.src = finalCover;
+  }
+  if (fsBgBlur) {
+    if (coverUrl && coverUrl.startsWith('http') || (coverUrl && coverUrl.startsWith('/api/cover/'))) {
+      fsBgBlur.style.backgroundImage = `url('${coverUrl}')`;
+    } else {
+      fsBgBlur.style.backgroundImage = 'none';
+    }
+  }
+}
+
 function playTrack(index, autoOpenPlayer = true) {
   if (index < 0 || index >= state.tracks.length) return;
   state.currentTrackIndex = index;
@@ -794,44 +908,65 @@ function playTrack(index, autoOpenPlayer = true) {
 
   // 2. Update mini footer player
   playerTitle.innerText = track.song_name;
-  playerArtist.innerText = `${track.singers} · ${track.source_label}`;
-  const coverUrl = track.cover_url || 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 60 60%22><rect fill=%22%23e2e8f0%22 width=%2260%22 height=%2260%22/></svg>';
-  playerCover.src = coverUrl;
+  playerArtist.innerText = `${track.singers} · ${track.source_label || ''}`;
+  const effectiveCover = track.cover_url || (track.token ? `/api/cover/${track.token}` : '');
+  updatePlayerCover(effectiveCover);
 
   // 3. Update Fullscreen Player details
   fsHeaderTitle.innerText = track.song_name;
-  fsHeaderArtist.innerText = `${track.singers} · ${track.source_label}`;
-  fsCoverImg.src = coverUrl;
-  if (track.cover_url) {
-    fsBgBlur.style.backgroundImage = `url('${track.cover_url}')`;
-  } else {
-    fsBgBlur.style.backgroundImage = 'none';
-  }
+  fsHeaderArtist.innerText = `${track.singers} · ${track.source_label || ''}`;
   fsSourceBadge.innerText = track.source_label || '主流音源';
   const cleanExtName = (track.ext && track.ext.toLowerCase() !== 'none' && track.ext.toLowerCase() !== 'null') ? track.ext.toUpperCase() : 'HQ';
   const qualityDesc = track.lossless ? '无损原声' : (track.quality_type === 'hq' ? '超高品质' : '标准品质');
   fsExtBadge.innerText = `${cleanExtName} · ${qualityDesc}`;
 
+  // 控制底部与全屏播放器下载按钮显隐：歌单曲目隐藏，搜索曲目显示
+  const isFromPlaylist = Boolean(track.from_playlist || state.tracksSource === 'playlist');
+  if (downloadDirectBtn) {
+    if (isFromPlaylist) {
+      downloadDirectBtn.classList.add('hidden');
+    } else {
+      downloadDirectBtn.classList.remove('hidden');
+    }
+  }
+  if (fsDownloadBtn) {
+    if (isFromPlaylist) {
+      fsDownloadBtn.classList.add('hidden');
+    } else {
+      fsDownloadBtn.classList.remove('hidden');
+    }
+  }
+
   // 4. Set audio stream and start playing
   state.predictedNextIndex = -1;
-  audioElement.src = track.stream_url;
-  audioElement.play().then(() => {
-    updatePlayPauseIcon(true);
-    preloadAndHealNextTrack();
-  }).catch(e => {
-    console.error('Play error:', e);
-    preloadAndHealNextTrack();
-  });
+  if (track.stream_url) {
+    audioElement.src = track.stream_url;
+    audioElement.play().then(() => {
+      updatePlayPauseIcon(true);
+      preloadAndHealNextTrack();
+    }).catch(e => {
+      console.error('Play error:', e);
+      preloadAndHealNextTrack();
+    });
+  } else {
+    // 尚未获取流链接（例如歌单刚秒开载入中），显示转圈缓冲态，绝不设空src避免浏览器触发假错误
+    updatePlayPauseIcon(false, true);
+    if (playerArtist) playerArtist.innerText = `🔄 正在准备音频流...`;
+    if (fsHeaderArtist) fsHeaderArtist.innerText = `🔄 正在准备音频流...`;
+  }
 
   // 5. Fetch lyrics
-  loadLyric(track.token);
-
-  // 异步获取流媒体解析后的实时真实音质元数据并动态刷新列表
-  fetch(`/api/track/info/${track.token}`).then(r => r.json()).then(latest => {
-    if (latest && !latest.error) {
-      updateTrackRowBadges(track.token, latest);
-    }
-  }).catch(() => {});
+  if (track.token) {
+    loadLyric(track.token);
+    fetch(`/api/track/info/${track.token}`).then(r => r.json()).then(latest => {
+      if (latest && !latest.error) {
+        updateTrackRowBadges(track.token, latest);
+        if (latest.cover_url && state.currentTrack && state.currentTrack.token === track.token) {
+          updatePlayerCover(latest.cover_url);
+        }
+      }
+    }).catch(() => {});
+  }
 
   // 6. 核心需求：播放时自动进入播放器
   if (autoOpenPlayer) {
@@ -1163,6 +1298,20 @@ audioElement.onerror = async () => {
     fsHeaderArtist.innerText = `${track.singers} · ${track.source_label}`;
     updatePlayPauseIcon(false);
   }
+};
+
+audioElement.onplay = () => {
+  updatePlayPauseIcon(true);
+  if (state.currentTrack) {
+    const t = state.currentTrack;
+    const artistText = `${t.singers} · ${t.source_label || '主流音源'}`;
+    if (playerArtist) playerArtist.innerText = artistText;
+    if (fsHeaderArtist) fsHeaderArtist.innerText = artistText;
+  }
+};
+
+audioElement.onpause = () => {
+  updatePlayPauseIcon(false);
 };
 
 audioElement.onended = () => {
@@ -1555,17 +1704,102 @@ function renderPlaylistTable() {
   });
 }
 
-playlistDownloadAllBtn.onclick = () => {
-  if (state.playlistTracks.length === 0) return;
-  state.tracks = [...state.playlistTracks];
+async function loadAndPlayPlaylist(tracks, targetIdx = 0) {
+  if (!tracks || tracks.length === 0) {
+    showToast('该歌单内暂无曲目');
+    return;
+  }
+  targetIdx = Math.max(0, Math.min(targetIdx, tracks.length - 1));
+
+  // 1.【0毫秒瞬间响应】：立即关闭弹窗，切到主页展示区，铺满表格，打开全屏播放界面！
+  closePlaylistsModal();
+  tabSearchBtn.click();
+  state.tracksSource = 'playlist';
+  const playlistTracks = (tracks || []).map(t => ({ ...t, from_playlist: true }));
+  state.tracks = playlistTracks;
   resultsTableBody.innerHTML = '';
   state.tracks.forEach((t, i) => appendTrackRow(t, i));
-  tabSearchBtn.click();
-  playTrack(0);
+  playTrack(targetIdx, true);
+
+  // 2.【后台毫秒级静默激活】：换取会话令牌并无缝接入正式音频流与歌词
+  try {
+    const res = await safeFetchJson('/api/playlist/activate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tracks: tracks })
+    });
+    if (res && res.tracks && res.tracks.length > 0) {
+      state.tracks = res.tracks.map(t => ({ ...t, from_playlist: true }));
+      // 重新渲染表格
+      resultsTableBody.innerHTML = '';
+      state.tracks.forEach((t, i) => appendTrackRow(t, i));
+      const activeRow = document.querySelector(`.track-row[data-index="${targetIdx}"]`);
+      if (activeRow) activeRow.classList.add('playing');
+
+      const curTrack = state.tracks[targetIdx];
+      state.currentTrack = curTrack;
+      if (curTrack) {
+        const activeCover = curTrack.cover_url || `/api/cover/${curTrack.token}`;
+        updatePlayerCover(activeCover);
+        curTrack.cover_url = activeCover;
+        updatePlaylistTrackCache(curTrack, { cover_url: activeCover });
+
+        if (curTrack.stream_url) {
+          const artistText = `${curTrack.singers} · ${curTrack.source_label || '主流音源'}`;
+          if (playerArtist) playerArtist.innerText = artistText;
+          if (fsHeaderArtist) fsHeaderArtist.innerText = artistText;
+
+          audioElement.src = curTrack.stream_url;
+          audioElement.play().then(() => {
+            updatePlayPauseIcon(true);
+            preloadAndHealNextTrack();
+          }).catch(err => {
+            console.warn('Autoplay failed:', err);
+            updatePlayPauseIcon(false);
+          });
+          loadLyric(curTrack.token);
+          fetch(`/api/track/info/${curTrack.token}`).then(r => r.json()).then(latest => {
+            if (latest && !latest.error) {
+              updateTrackRowBadges(curTrack.token, latest);
+              if (latest.cover_url && state.currentTrack && state.currentTrack.token === curTrack.token) {
+                updatePlayerCover(latest.cover_url);
+              }
+            }
+          }).catch(() => {});
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Playlist activate error:', e);
+  }
+}
+
+playlistDownloadAllBtn.onclick = () => {
+  loadAndPlayPlaylist(state.playlistTracks, 0);
 };
 
-// 8. 我的歌单管理与跨设备数据中心 (Local Storage)
+// 8. 我的歌单管理与跨设备数据中心 (Local Storage 纯元数据持久化)
 const STORAGE_KEY_MY_PLAYLISTS = 'soundflow_my_playlists';
+
+function cleanTrackForStorage(track) {
+  if (!track || typeof track !== 'object') return null;
+  return {
+    song_name: String(track.song_name || '未知曲目').trim(),
+    singers: String(track.singers || '未知歌手').trim(),
+    album: String(track.album || '').trim(),
+    source: String(track.source || 'QQMusicClient').trim(),
+    source_label: String(track.source_label || '').trim(),
+    source_short: String(track.source_short || '').trim(),
+    identifier: String(track.identifier || '').trim(),
+    duration: String(track.duration || '00:00').trim(),
+    cover_url: String(track.cover_url || '').trim(),
+    ext: String(track.ext || 'mp3').trim(),
+    quality_label: String(track.quality_label || '').trim(),
+    quality_type: String(track.quality_type || 'standard').trim(),
+    lossless: Boolean(track.lossless),
+    has_lyric: Boolean(track.has_lyric)
+  };
+}
 
 function getMyPlaylists() {
   try {
@@ -1578,7 +1812,14 @@ function getMyPlaylists() {
 
 function saveMyPlaylists(list) {
   try {
-    localStorage.setItem(STORAGE_KEY_MY_PLAYLISTS, JSON.stringify(list));
+    const cleaned = (list || []).map(pl => {
+      const copy = { ...pl };
+      if (Array.isArray(copy.tracks)) {
+        copy.tracks = copy.tracks.map(cleanTrackForStorage).filter(Boolean);
+      }
+      return copy;
+    });
+    localStorage.setItem(STORAGE_KEY_MY_PLAYLISTS, JSON.stringify(cleaned));
   } catch (e) {
     console.error('Save playlists error:', e);
   }
@@ -1626,8 +1867,12 @@ function updateParsingGuard() {
 }
 
 function openPlaylistsModal() {
-  renderMyPlaylistsCards();
   myPlaylistsModal.classList.remove('hidden');
+  try {
+    renderMyPlaylistsCards();
+  } catch (err) {
+    console.error('Failed to render playlist cards:', err);
+  }
 }
 
 function closePlaylistsModal() {
@@ -1742,12 +1987,6 @@ function renderMyPlaylistsCards() {
           <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
           <span>播放此歌单</span>
         </button>
-        <button class="pl-sync-btn px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100/90 text-emerald-700 rounded-xl text-xs font-semibold border border-emerald-200 transition flex items-center gap-1 shadow-xs" title="重新从源站获取该歌单最新的曲目与有效播放直链">
-          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-          </svg>
-          <span>刷新同步</span>
-        </button>
         <button class="pl-toggle-tracks-btn px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 rounded-xl text-xs font-medium border border-slate-200 transition flex items-center gap-1">
           <span>曲目清单</span>
           <span class="pl-arrow text-[10px]">▼</span>
@@ -1774,11 +2013,27 @@ function renderMyPlaylistsCards() {
             <img src="${coverSrc}" class="w-12 h-12 rounded-xl object-cover border border-emerald-100 shrink-0 bg-slate-100" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 60 60%22><rect fill=%22%23e2e8f0%22 width=%2260%22 height=%2260%22/></svg>'">
           `}
           <div class="min-w-0 flex-1">
-            <div class="text-sm font-bold text-slate-800 truncate flex items-center gap-2">
-              <span>${escapeHtml(pl.name)}</span>
-              ${isParsing ? '<span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 font-medium">解析中</span>' : ''}
-              ${isError ? '<span class="text-[10px] px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-300 font-medium">失败</span>' : ''}
+            <!-- 歌单标题展示态 -->
+            <div class="pl-name-view-box flex items-center gap-1.5 min-w-0">
+              <span class="pl-name-text text-sm font-bold text-slate-800 truncate" title="${escapeHtml(pl.name)}">${escapeHtml(pl.name)}</span>
+              ${(!isParsing && !isError) ? `
+                <button type="button" class="pl-rename-btn p-1 text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition shrink-0" title="重命名此歌单">
+                  <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                  </svg>
+                </button>
+              ` : ''}
+              ${isParsing ? '<span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 font-medium shrink-0">解析中</span>' : ''}
+              ${isError ? '<span class="text-[10px] px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-300 font-medium shrink-0">失败</span>' : ''}
             </div>
+
+            <!-- 内联重命名编辑态 (默认隐藏) -->
+            <div class="pl-name-edit-box hidden items-center gap-1.5 min-w-0 my-0.5">
+              <input type="text" class="pl-name-input px-2.5 py-1 text-xs border border-emerald-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/30 text-slate-800 font-semibold w-40 sm:w-56" value="${escapeHtml(pl.name)}" maxlength="40" placeholder="请输入歌单名称">
+              <button type="button" class="pl-rename-save-btn px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg shadow-xs transition">保存</button>
+              <button type="button" class="pl-rename-cancel-btn px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-medium rounded-lg transition">取消</button>
+            </div>
+
             ${statusBadgeHtml}
           </div>
         </div>
@@ -1802,11 +2057,6 @@ function renderMyPlaylistsCards() {
                 </div>
                 <div class="flex items-center gap-3 shrink-0 text-slate-400">
                   <span class="font-mono text-[11px]">${t.duration || ''}</span>
-                  <button class="pl-single-dl-btn text-emerald-600 hover:text-emerald-700 p-1" title="下载此单曲">
-                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
-                    </svg>
-                  </button>
                 </div>
               </div>
             `).join('')}
@@ -1822,32 +2072,89 @@ function renderMyPlaylistsCards() {
     const arrowSpan = card.querySelector('.pl-arrow');
     const delBtn = card.querySelector('.pl-del-btn');
     const retryBtn = card.querySelector('.pl-retry-btn');
+    // 内联重命名事件绑定
+    const renameBtn = card.querySelector('.pl-rename-btn');
+    const nameViewBox = card.querySelector('.pl-name-view-box');
+    const nameEditBox = card.querySelector('.pl-name-edit-box');
+    const nameInput = card.querySelector('.pl-name-input');
+    const nameSaveBtn = card.querySelector('.pl-rename-save-btn');
+    const nameCancelBtn = card.querySelector('.pl-rename-cancel-btn');
+    const nameTextSpan = card.querySelector('.pl-name-text');
+
+    if (renameBtn && nameViewBox && nameEditBox && nameInput) {
+      const openEdit = () => {
+        nameViewBox.classList.add('hidden');
+        nameEditBox.classList.remove('hidden');
+        nameEditBox.classList.add('flex');
+        nameInput.value = pl.name;
+        nameInput.focus();
+        nameInput.select();
+      };
+
+      const closeEdit = () => {
+        nameEditBox.classList.add('hidden');
+        nameEditBox.classList.remove('flex');
+        nameViewBox.classList.remove('hidden');
+      };
+
+      const saveRename = () => {
+        const newName = nameInput.value.trim();
+        if (!newName) {
+          showToast('歌单名称不能为空');
+          nameInput.focus();
+          return;
+        }
+        if (newName !== pl.name) {
+          pl.name = newName;
+          pl.hasCustomName = true;
+          const curList = getMyPlaylists();
+          const target = curList.find(p => p.id === pl.id);
+          if (target) {
+            target.name = newName;
+            target.hasCustomName = true;
+          }
+          saveMyPlaylists(curList);
+          nameTextSpan.innerText = newName;
+          nameTextSpan.title = newName;
+          showToast(`已重命名为《${newName}》`);
+        }
+        closeEdit();
+      };
+
+      renameBtn.onclick = (e) => {
+        e.stopPropagation();
+        openEdit();
+      };
+
+      if (nameSaveBtn) {
+        nameSaveBtn.onclick = (e) => {
+          e.stopPropagation();
+          saveRename();
+        };
+      }
+
+      if (nameCancelBtn) {
+        nameCancelBtn.onclick = (e) => {
+          e.stopPropagation();
+          closeEdit();
+        };
+      }
+
+      nameInput.onkeydown = (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') {
+          saveRename();
+        } else if (e.key === 'Escape') {
+          closeEdit();
+        }
+      };
+
+      nameInput.onclick = (e) => e.stopPropagation();
+    }
 
     if (playAllBtn) {
       playAllBtn.onclick = () => {
-        if (!pl.tracks || pl.tracks.length === 0) {
-          showToast('该歌单内暂无曲目');
-          return;
-        }
-        state.tracks = [...pl.tracks];
-        resultsTableBody.innerHTML = '';
-        state.tracks.forEach((t, i) => appendTrackRow(t, i));
-        tabSearchBtn.click();
-        closePlaylistsModal();
-        playTrack(0, true);
-        showToast(`正在播放歌单《${pl.name}》（共 ${pl.tracks.length} 首）`);
-      };
-    }
-
-    const syncBtn = card.querySelector('.pl-sync-btn');
-    if (syncBtn) {
-      syncBtn.onclick = () => {
-        pl.status = 'parsing';
-        pl.errorMsg = '';
-        saveMyPlaylists(getMyPlaylists());
-        renderMyPlaylistsCards();
-        runPlaylistTask(pl);
-        showToast(`正在重新拉取歌单《${pl.name}》的全部曲目与最新播放通道...`);
+        loadAndPlayPlaylist(pl.tracks, 0);
       };
     }
 
@@ -1890,24 +2197,12 @@ function renderMyPlaylistsCards() {
       };
     }
 
-    // 单曲点击播放与下载（全端单点即播，兼容手机触控与电脑单击）
+    // 单曲点击播放（全端单点即播，0毫秒瞬间进入播放器）
     card.querySelectorAll('.playlist-track-item').forEach(itemEl => {
       const tIdx = parseInt(itemEl.dataset.trackIdx, 10);
-      const track = pl.tracks[tIdx];
       itemEl.onclick = () => {
-        state.tracks = [...pl.tracks];
-        resultsTableBody.innerHTML = '';
-        state.tracks.forEach((t, i) => appendTrackRow(t, i));
-        closePlaylistsModal();
-        playTrack(tIdx, true);
+        loadAndPlayPlaylist(pl.tracks, tIdx);
       };
-      const dlBtn = itemEl.querySelector('.pl-single-dl-btn');
-      if (dlBtn) {
-        dlBtn.onclick = (e) => {
-          e.stopPropagation();
-          requestDownload(track);
-        };
-      }
     });
 
     myPlaylistsCardsContainer.appendChild(card);
@@ -2100,6 +2395,442 @@ importConfigFileInput.onchange = (e) => {
   };
   reader.readAsText(file, 'utf-8');
 };
+
+// ==========================================
+// 8.1 二维码配置导出与跨端同步恢复 (服务端即时中继 + 端到端光学解析)
+// ==========================================
+const QR_CONFIG_PREFIX = 'SF1:';
+let currentQrInstance = null;
+let scanVideoStream = null;
+let scanAnimationReq = null;
+
+function getFullBackupPayload() {
+  const playlists = getMyPlaylists();
+  return {
+    playlists: playlists,
+    preferences: {
+      format: getSavedFormat(),
+      include_lrc: getSavedIncludeLrc(),
+      embed_lyric: getSavedEmbedLyric()
+    }
+  };
+}
+
+async function showQrExportModal() {
+  if (typeof QRCode === 'undefined') {
+    showToast('二维码渲染引擎未就绪，请刷新重试');
+    return;
+  }
+  const playlists = getMyPlaylists();
+  const totalTracks = playlists.reduce((acc, p) => acc + (p.tracks ? p.tracks.length : 0), 0);
+
+  if (qrExportNetBadge) qrExportNetBadge.classList.add('hidden');
+  qrExportSummaryText.innerText = '正在智能研判网络环境并生成同步码...';
+  qrExportCanvasWrapper.innerHTML = '<div class="flex items-center justify-center h-full text-xs text-slate-400">正在生成二维码...</div>';
+  qrExportModal.classList.remove('hidden');
+
+  try {
+    const payload = getFullBackupPayload();
+    // 服务端全自动研判局域网还是云端服务器，彻底防呆
+    const res = await safeFetchJson('/api/sync/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (res && res.success && res.token && res.sync_url) {
+      qrExportCanvasWrapper.innerHTML = '';
+      currentQrInstance = new QRCode(qrExportCanvasWrapper, {
+        text: res.sync_url,
+        width: 220,
+        height: 220,
+        colorDark: '#0f172a',
+        colorLight: '#ffffff',
+        correctLevel: QRCode.CorrectLevel.M
+      });
+
+      // 智能网络只读徽标呈现
+      if (qrExportNetBadge && qrExportNetBadgeText) {
+        qrExportNetBadge.classList.remove('hidden');
+        if (res.env_type === 'server') {
+          qrExportNetBadge.className = 'inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-sky-50 text-sky-800 border border-sky-200 shadow-2xs';
+        } else {
+          qrExportNetBadge.className = 'inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-2xs';
+        }
+        qrExportNetBadgeText.innerText = res.badge_text || '已就绪';
+      }
+
+      if (qrExportSubText) {
+        qrExportSubText.innerText = res.sub_text || '手机相机或微信扫码打开，秒级自动合并歌单';
+      }
+
+      qrExportSummaryText.innerText = `已生成同步码（收录 ${playlists.length} 个歌单，共 ${totalTracks} 首歌）`;
+      qrExportModal.dataset.qrText = res.sync_url;
+    } else {
+      throw new Error(res.error || '创建同步码失败');
+    }
+  } catch (err) {
+    console.warn('Sync relay failed, fallback to local packing:', err);
+    if (qrExportNetBadge && qrExportNetBadgeText) {
+      qrExportNetBadge.classList.remove('hidden');
+      qrExportNetBadge.className = 'inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200 shadow-2xs';
+      qrExportNetBadgeText.innerText = '📦 离线纯文本模式';
+    }
+    if (qrExportSubText) qrExportSubText.innerText = '离线模式：需使用本站内置的【扫码恢复】摄像头取景器识别';
+    // 降级为离线纯文本压缩
+    try {
+      const qrDataText = packCompactQrData();
+      qrExportCanvasWrapper.innerHTML = '';
+      currentQrInstance = new QRCode(qrExportCanvasWrapper, {
+        text: qrDataText,
+        width: 220,
+        height: 220,
+        colorDark: '#0f172a',
+        colorLight: '#ffffff',
+        correctLevel: QRCode.CorrectLevel.L
+      });
+      qrExportSummaryText.innerText = `离线模式：已打包 ${playlists.length} 个歌单（${totalTracks} 首歌）`;
+      qrExportModal.dataset.qrText = qrDataText;
+    } catch (e2) {
+      qrExportCanvasWrapper.innerHTML = '<div class="p-4 text-center text-xs text-rose-500">无法连接服务端同步通道，且离线数据超出上限。建议使用【文件导出】。</div>';
+      qrExportSummaryText.innerText = '生成失败';
+    }
+  }
+}
+
+function packCompactQrData() {
+  const playlists = getMyPlaylists();
+  const compactLists = (playlists || []).map(pl => ({
+    n: String(pl.name || '歌单').trim(),
+    t: (pl.tracks || []).map(t => [
+      String(t.song_name || '').trim(),
+      String(t.singers || '').trim(),
+      String(t.source || 'QQMusicClient').trim(),
+      String(t.identifier || '').trim(),
+      String(t.duration || '00:00').trim(),
+      String(t.album || '').trim()
+    ])
+  }));
+  const payload = {
+    p: { f: getSavedFormat(), l: getSavedIncludeLrc(), e: getSavedEmbedLyric() },
+    l: compactLists
+  };
+  return QR_CONFIG_PREFIX + btoa(encodeURIComponent(JSON.stringify(payload)));
+}
+
+function closeQrExportModal() {
+  qrExportModal.classList.add('hidden');
+  qrExportCanvasWrapper.innerHTML = '';
+  currentQrInstance = null;
+}
+
+if (exportQrConfigBtn) exportQrConfigBtn.onclick = showQrExportModal;
+if (closeQrExportModalBtn) closeQrExportModalBtn.onclick = closeQrExportModal;
+
+if (downloadQrImgBtn) {
+  downloadQrImgBtn.onclick = () => {
+    const canvas = qrExportCanvasWrapper.querySelector('canvas');
+    const img = qrExportCanvasWrapper.querySelector('img');
+    let dataUrl = '';
+    if (canvas) {
+      dataUrl = canvas.toDataURL('image/png');
+    } else if (img && img.src) {
+      dataUrl = img.src;
+    }
+    if (!dataUrl) {
+      showToast('暂无可保存的二维码图像');
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = `SoundFlow_Sync_QR_${Date.now()}.png`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => a.remove(), 500);
+    showToast('已保存同步二维码图片');
+  };
+}
+
+if (copyQrCodeTextBtn) {
+  copyQrCodeTextBtn.onclick = () => {
+    const text = qrExportModal.dataset.qrText;
+    if (!text) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => {
+        showToast('已复制同步链接至剪贴板');
+      }).catch(() => fallbackCopy(text));
+    } else {
+      fallbackCopy(text);
+    }
+  };
+}
+
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand('copy');
+    showToast('已复制同步链接至剪贴板');
+  } catch (e) {
+    showToast('复制失败，请手动选择复制');
+  }
+  document.body.removeChild(ta);
+}
+
+// 启动检测与 URL Hash 自动恢复 (iPhone/微信系统相机扫码即开)
+async function checkUrlSyncOnStartup() {
+  const hash = window.location.hash || '';
+  if (!hash.startsWith('#sync=')) return;
+  const token = hash.replace('#sync=', '').trim();
+  if (!token) return;
+
+  showToast('正在从服务端拉取歌单与配置...', 4000);
+  try {
+    const res = await safeFetchJson(`/api/sync/get/${token}`);
+    if (res && res.success && res.data) {
+      applyRestoredConfig(res.data);
+      history.replaceState(null, document.title, window.location.pathname + window.location.search);
+    } else {
+      showToast(res.error || '该同步码已失效或已过期');
+    }
+  } catch (e) {
+    showToast('从服务端拉取同步数据失败: ' + e.message);
+  }
+}
+
+// 扫码恢复
+async function startQrScanner() {
+  qrScanModal.classList.remove('hidden');
+  qrScanPromptMask.classList.add('hidden');
+  qrScanStatusMsg.innerText = '将摄像头对准另一台屏幕上的配置二维码';
+
+  // 检测是否具备原生摄像头调用环境 (iOS Safari 在非 HTTPS 局域网下不存在或抛出安全拒绝)
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    qrScanPromptMask.classList.remove('hidden');
+    qrScanPromptText.innerText = 'iPhone 在非 HTTPS 局域网下受苹果安全策略限制实时取景，推荐直接用 iPhone 系统相机扫码打开，或点击下方拍照识别';
+    qrScanStatusMsg.innerText = '摄像头受限，推荐使用手机自带相机扫码或下方拍照识别';
+    return;
+  }
+
+  try {
+    const constraints = {
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
+    };
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    scanVideoStream = stream;
+    qrScanVideo.srcObject = stream;
+    qrScanVideo.setAttribute('playsinline', true);
+    await qrScanVideo.play();
+    requestAnimationFrame(scanVideoFrame);
+  } catch (err) {
+    console.warn('Camera open failed (likely iOS HTTP policy):', err);
+    qrScanPromptMask.classList.remove('hidden');
+    qrScanPromptText.innerText = 'iPhone 在非 HTTPS 局域网下受苹果安全策略限制实时取景，推荐直接用 iPhone 系统相机扫码打开，或点击下方拍照识别';
+    qrScanStatusMsg.innerText = '摄像头不可用，请使用手机自带相机扫码或点击下方拍照识别';
+  }
+}
+
+function stopQrScanner() {
+  if (scanAnimationReq) {
+    cancelAnimationFrame(scanAnimationReq);
+    scanAnimationReq = null;
+  }
+  if (scanVideoStream) {
+    scanVideoStream.getTracks().forEach(t => t.stop());
+    scanVideoStream = null;
+  }
+  if (qrScanVideo) {
+    qrScanVideo.srcObject = null;
+  }
+  qrScanModal.classList.add('hidden');
+}
+
+function scanVideoFrame() {
+  if (!qrScanVideo || qrScanVideo.readyState !== qrScanVideo.HAVE_ENOUGH_DATA) {
+    scanAnimationReq = requestAnimationFrame(scanVideoFrame);
+    return;
+  }
+
+  const canvas = qrScanCanvas;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  canvas.width = qrScanVideo.videoWidth;
+  canvas.height = qrScanVideo.videoHeight;
+  ctx.drawImage(qrScanVideo, 0, 0, canvas.width, canvas.height);
+
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  if (typeof jsQR !== 'undefined') {
+    const code = jsQR(imageData.data, imageData.width, imageData.height, {
+      inversionAttempts: 'dontInvert'
+    });
+    if (code && code.data) {
+      handleScannedResult(code.data);
+      stopQrScanner();
+      return;
+    }
+  }
+
+  scanAnimationReq = requestAnimationFrame(scanVideoFrame);
+}
+
+function decodeQrFromImage(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      const imgData = ctx.getImageData(0, 0, img.width, img.height);
+      if (typeof jsQR !== 'undefined') {
+        const code = jsQR(imgData.data, imgData.width, imgData.height);
+        if (code && code.data) {
+          handleScannedResult(code.data);
+          stopQrScanner();
+          return;
+        }
+      }
+      showToast('未能从所选图片中识别出有效的二维码');
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+async function handleScannedResult(rawText) {
+  if (!rawText || typeof rawText !== 'string') return;
+  const trimmed = rawText.trim();
+
+  // 1. 若扫到的是包含 #sync= 的同步 URL
+  if (trimmed.includes('#sync=')) {
+    const token = trimmed.split('#sync=')[1].split('&')[0].trim();
+    if (token) {
+      showToast('正在从服务端拉取完整配置与歌单...', 3000);
+      try {
+        const res = await safeFetchJson(`/api/sync/get/${token}`);
+        if (res && res.success && res.data) {
+          applyRestoredConfig(res.data);
+          return;
+        } else {
+          showToast(res.error || '该同步码已失效或已过期');
+        }
+      } catch (err) {
+        showToast('拉取配置失败: ' + err.message);
+      }
+      return;
+    }
+  }
+
+  // 2. 若扫到的是离线紧凑码 SF1:
+  if (trimmed.startsWith(QR_CONFIG_PREFIX)) {
+    try {
+      const rawBase64 = trimmed.slice(QR_CONFIG_PREFIX.length);
+      const jsonStr = decodeURIComponent(atob(rawBase64));
+      const payload = JSON.parse(jsonStr);
+      if (payload && Array.isArray(payload.l)) {
+        const restoredPlaylists = payload.l.map((item, idx) => ({
+          id: `pl_qr_${Date.now()}_${idx}`,
+          name: item.n || `同步歌单 ${idx + 1}`,
+          status: 'done',
+          tracks: (item.t || []).map(arr => ({
+            song_name: arr[0] || '未知曲目',
+            singers: arr[1] || '未知歌手',
+            source: arr[2] || 'QQMusicClient',
+            identifier: arr[3] || '',
+            duration: arr[4] || '00:00',
+            album: arr[5] || '',
+            source_short: (arr[2] || '').replace('MusicClient', '').toUpperCase(),
+            source_label: arr[2] || '主流音源',
+            ext: 'mp3',
+            quality_type: 'standard',
+            quality_label: 'MP3'
+          }))
+        }));
+        applyRestoredConfig({ playlists: restoredPlaylists, preferences: payload.p || {} });
+        return;
+      }
+    } catch (e) {
+      console.error('Compact unpack error:', e);
+    }
+  }
+
+  // 3. 若为标准 JSON 格式
+  try {
+    const raw = JSON.parse(trimmed);
+    if (raw && Array.isArray(raw.playlists)) {
+      applyRestoredConfig(raw);
+      return;
+    }
+  } catch (e) {}
+
+  showToast('该二维码不是有效的 SoundFlow 歌单配置');
+}
+
+function applyRestoredConfig(data) {
+  if (!data || !Array.isArray(data.playlists)) {
+    showToast('该数据不是有效的 SoundFlow 歌单配置');
+    return false;
+  }
+
+  const existing = getMyPlaylists();
+  const existingNames = new Set(existing.map(p => p.name));
+  let addedCount = 0;
+
+  data.playlists.forEach(pl => {
+    if (!existingNames.has(pl.name)) {
+      existing.push(pl);
+      addedCount++;
+    } else {
+      const target = existing.find(p => p.name === pl.name);
+      if (target && Array.isArray(target.tracks) && Array.isArray(pl.tracks)) {
+        const tSet = new Set(target.tracks.map(t => t.song_name + '|' + t.singers));
+        pl.tracks.forEach(nt => {
+          if (!tSet.has(nt.song_name + '|' + nt.singers)) {
+            target.tracks.push(nt);
+          }
+        });
+      }
+    }
+  });
+
+  saveMyPlaylists(existing);
+
+  if (data.preferences) {
+    if (data.preferences.format) localStorage.setItem(STORAGE_KEY_FORMAT, data.preferences.format);
+    if (data.preferences.f) localStorage.setItem(STORAGE_KEY_FORMAT, data.preferences.f);
+    if (data.preferences.include_lrc !== undefined) localStorage.setItem(STORAGE_KEY_INCLUDE_LRC, String(data.preferences.include_lrc));
+    if (data.preferences.l !== undefined) localStorage.setItem(STORAGE_KEY_INCLUDE_LRC, String(data.preferences.l));
+    if (data.preferences.embed_lyric !== undefined) localStorage.setItem(STORAGE_KEY_EMBED_LYRIC, String(data.preferences.embed_lyric));
+    if (data.preferences.e !== undefined) localStorage.setItem(STORAGE_KEY_EMBED_LYRIC, String(data.preferences.e));
+    updateFormatBadge();
+  }
+
+  renderMyPlaylistsCards();
+  showToast(`同步恢复成功！已合并收录 ${existing.length} 个歌单（新载入 ${addedCount} 个）`);
+  return true;
+}
+
+if (scanQrConfigBtn) scanQrConfigBtn.onclick = startQrScanner;
+if (closeQrScanModalBtn) closeQrScanModalBtn.onclick = stopQrScanner;
+
+if (pickQrImageBtn && qrImageFileInput) {
+  pickQrImageBtn.onclick = () => qrImageFileInput.click();
+  qrImageFileInput.onchange = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (file) decodeQrFromImage(file);
+    qrImageFileInput.value = '';
+  };
+}
+
+if (triggerImagePickerBtn && qrImageFileInput) {
+  triggerImagePickerBtn.onclick = () => qrImageFileInput.click();
+}
 
 // Utilities
 function formatTime(seconds) {

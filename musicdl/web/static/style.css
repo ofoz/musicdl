@@ -283,3 +283,23 @@ th.whitespace-nowrap, td.whitespace-nowrap {
 .playlist-track-item:hover {
   background-color: rgba(240, 253, 244, 0.7);
 }
+
+/* 9. 扫码激光线动效 */
+@keyframes scanLineAnim {
+  0% { top: 6px; }
+  50% { top: calc(100% - 8px); }
+  100% { top: 6px; }
+}
+
+.animate-pulse-line {
+  position: absolute;
+  animation: scanLineAnim 2.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* 10. 歌单重命名按钮轻柔微动效 */
+.pl-rename-btn {
+  transition: all 0.15s ease;
+}
+.pl-rename-btn:hover {
+  transform: scale(1.1);
+}
