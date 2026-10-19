@@ -72,6 +72,7 @@
 
 # 🎉 What's New
 
+- 2026-10-19: Upgraded Modern WebUI — Added zero-dependency QR code cross-device sync with intelligent network environment detection (LAN IP / Domain auto-switching), on-demand track resolve with self-healing playback & 300x300 HD album cover alignment, in-place playlist renaming, and streamlined dynamic search status lifecycle.
 - 2026-10-18: Integrated Modern WebUI — Zero-dependency web workbench featuring SSE streaming concurrent multi-source search, HTTP Range audio streaming proxy, mobile & desktop immersive player with synchronized scrolling lyrics, safe metadata/lyrics embedding, and batch playlist parser.
 - 2026-10-16: Released musicdl v2.14.2 — performed monthly maintenance on common music clients and fixed broken API integrations in four affected clients.
 - 2026-10-10: Released musicdl v2.14.1 — monthly maintenance of third-party music clients: fixed API issues on four platforms and replaced three discontinued ones with similar alternatives.
@@ -346,9 +347,19 @@ python -m musicdl.web --host 0.0.0.0 --port 5050 --work-dir ./my_downloads --no-
   - 智能选择最高音质（无损 FLAC / 320k MP3 等），支持按需切换音频格式。
   - 下载音频自动内嵌完整 ID3v2/MP4 专辑封面与 LRC 滚动歌词。
   - 服务端响应头文件名采用 RFC 5987 / RFC 6266 标准化安全编码，彻底杜绝 Windows/Linux 中文文件名乱码。
-- 📂 **歌单批量解析与备份**：
-  - 支持主流平台歌单链接一键解析，自动提取并保留原始歌单名称。
-  - 本地“我的歌单”多源容灾备份、持久化存储与导出。
+- 📲 **跨设备二维码极速同步与智能环境感知**：
+  - 本地集成纯前端 `qrcode` 生成与 `jsQR` 摄像头扫码识别，100% 离线脱离外部 CDN 依赖。
+  - 自动根据客户端 Host 智能研判当前环境：处于局域网时自动选用物理 IP（如 `172.20.10.6:5050`），处于云端时自动切换服务器域名（如 `music.dbas.fun`），手机扫码即刻秒级合并双端歌单与偏好设置。
+- 🔄 **解耦化歌单即时自愈播放与高清封面补全**：
+  - 彻底抛弃传统歌单解析预存直链容易时效性过期的痛点，采用按需即时解析（On-demand Resolve & Self-Healing），点击曲目即刻 0 毫秒静默自愈获取最新高品质有效直链。
+  - `/api/cover/<token>` 官方 API 极速对齐 300x300 高清专辑原图并自动回写本地缓存，彻底告别歌单曲目封面缺失或失效。
+- 📂 **已收藏歌单全生命周期管理**：
+  - 支持主流平台歌单链接一键批量解析收录，本地 LocalStorage 持久化安全存储。
+  - 支持内联原地重命名（回车快速保存、防刷新覆盖）、单曲点播与快捷清单折叠查看。
+  - 剔除无意义的“刷新同步”冗余按钮，彻底消除与跨端同步的概念混淆。
+- ⚡ **搜索按钮全生命周期状态流转与极简布局**：
+  - 搜索按钮动态承载全局状态（`检索中...` ➔ `已找到 X 首` ➔ `搜索完成`），完成 4 秒后平滑复原，输入新词秒级重置。
+  - 移除冗余状态提示行与顶栏无用 Tab，音源筛选与曲目列表无缝衔接，带来极致清爽体验。
 - 🧪 **自动化测试套件**：
   - 项目内置完整单元与端到端测试套件（位于 `tests/` 目录），覆盖流式搜索、音频代理、歌单解析、安全下载与双端播放器布局。运行 `python -m unittest discover -s tests` 即可一键验证。
 
