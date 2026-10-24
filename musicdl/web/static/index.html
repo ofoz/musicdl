@@ -33,26 +33,18 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/>
           </svg>
         </div>
-        <span class="font-bold text-base sm:text-lg tracking-tight bg-gradient-to-r from-slate-900 via-emerald-950 to-teal-800 bg-clip-text text-transparent whitespace-nowrap">SoundFlow</span>
-      </div>
-
-      <!-- Tab 切换 (桌面端居中展示，手机端隐藏以极致精简空间) -->
-      <div class="hidden sm:flex flex-1 items-center justify-center">
-        <div class="flex items-center bg-slate-100/90 p-1 rounded-xl border border-slate-200/80 text-sm shadow-inner">
-          <button id="tabSearchBtn" class="tab-btn active px-4 py-1.5 rounded-lg font-medium transition-all whitespace-nowrap text-center">单曲聚合搜索</button>
-          <button id="tabPlaylistBtn" class="hidden tab-btn px-4 py-1.5 rounded-lg font-medium transition-all text-slate-500 hover:text-slate-800 whitespace-nowrap text-center">歌单批量解析</button>
-        </div>
+        <span class="hidden min-[360px]:inline font-bold text-base sm:text-lg tracking-tight bg-gradient-to-r from-slate-900 via-emerald-950 to-teal-800 bg-clip-text text-transparent whitespace-nowrap">SoundFlow</span>
       </div>
 
       <!-- 右侧控制区 (手机端与桌面端均同一行右对齐，绝不折行) -->
-      <div class="flex items-center gap-2 sm:gap-3 shrink-0">
+      <div class="flex items-center gap-2 sm:gap-3 shrink-0 ml-auto">
         <!-- 歌单 (独立按钮，精简文案为“歌单”) -->
         <div class="flex items-center bg-slate-100/90 p-0.5 sm:p-1 rounded-xl border border-slate-200/80 text-xs sm:text-sm shadow-inner">
-          <button id="myPlaylistsBtn" class="flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-lg font-medium transition-all bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/25 select-none whitespace-nowrap" title="打开歌单与本地管理中心">
+          <button id="myPlaylistsBtn" class="flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-lg font-medium transition-all bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/25 select-none whitespace-nowrap" title="打开我的歌单与本地管理中心">
             <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
             </svg>
-            <span class="whitespace-nowrap font-medium text-xs sm:text-sm">歌单</span>
+            <span class="whitespace-nowrap font-medium text-xs sm:text-sm">我的歌单</span>
             <span id="myPlaylistsCountBadge" class="hidden text-[10px] sm:text-xs px-1.5 py-0.2 rounded-full bg-white/25 text-white font-mono font-bold shadow-sm">0</span>
           </button>
         </div>
@@ -841,6 +833,6 @@
   <audio id="audioElement" preload="none"></audio>
   <script src="/static/libs/qrcode.min.js"></script>
   <script src="/static/libs/jsQR.min.js"></script>
-  <script src="/static/app.js?v=20261024_01"></script>
+  <script src="/static/app.js?v=20261024_02"></script>
 </body>
 </html>

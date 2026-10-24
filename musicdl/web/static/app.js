@@ -63,8 +63,7 @@ const resultsTableBody = document.getElementById('resultsTableBody');
 const statusText = document.getElementById('statusText');
 const sourceChips = document.getElementById('sourceChips');
 
-const tabSearchBtn = document.getElementById('tabSearchBtn');
-const tabPlaylistBtn = document.getElementById('tabPlaylistBtn');
+// 顶部 Tab 菜单已移除，页面默认仅保留单曲搜索视图
 const searchView = document.getElementById('searchView');
 const playlistView = document.getElementById('playlistView');
 
@@ -559,20 +558,11 @@ function showToast(msg) {
   }, 3200);
 }
 
-// 3. Tab Navigation
-tabSearchBtn.onclick = () => {
-  tabSearchBtn.classList.add('active');
-  tabPlaylistBtn.classList.remove('active');
-  searchView.classList.remove('hidden');
-  playlistView.classList.add('hidden');
-};
-
-tabPlaylistBtn.onclick = () => {
-  tabPlaylistBtn.classList.add('active');
-  tabSearchBtn.classList.remove('active');
-  playlistView.classList.remove('hidden');
-  searchView.classList.add('hidden');
-};
+// 3. View Navigation（顶部 Tab 菜单已移除，固定使用单曲搜索视图）
+function showSearchView() {
+  if (searchView) searchView.classList.remove('hidden');
+  if (playlistView) playlistView.classList.add('hidden');
+}
 
 // Source Selection Shortcuts
 selectAllCoreBtn.onclick = () => {
@@ -1910,7 +1900,7 @@ async function loadAndPlayPlaylist(tracks, targetIdx = 0) {
 
   // 1.【0毫秒瞬间响应】：立即关闭弹窗，切到主页展示区，铺满表格，打开全屏播放界面！
   closePlaylistsModal();
-  tabSearchBtn.click();
+  showSearchView();
   state.tracksSource = 'playlist';
   const playlistTracks = (tracks || []).map(t => ({ ...t, from_playlist: true }));
   state.tracks = playlistTracks;
