@@ -516,7 +516,7 @@ class QQMusicClient(BaseMusicClient):
                     cover_url=cover_url,
                     duration_s=duration_s,
                     duration=SongInfoUtils.seconds2hms(duration_s),
-                    identifier=str(track_info.get('mid') or track_info.get('songmid'))
+                    identifier=str(track_info.get('mid') or track_info.get('songmid') or '')
                 )
                 song_infos.append(song_info)
             playlist_name = legalizestring(safeextractfromdict(playlist_result, ['cdlist', 0, 'dissname'], None) or f"playlist-{playlist_id}")

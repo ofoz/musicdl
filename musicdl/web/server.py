@@ -27,6 +27,7 @@ from flask import Flask, request, Response, jsonify, send_from_directory, stream
 from musicdl import musicdl
 from musicdl.modules.sources import MusicClientBuilder, BuildMusicClient
 from musicdl.modules.utils import SongInfo, SongInfoUtils
+from musicdl.modules.utils.qqutils import QQMusicClientUtils
 
 requests.packages.urllib3.disable_warnings()
 
@@ -69,6 +70,25 @@ RESULT_EXT_TO_MIME = {
     'ogg': 'audio/ogg',
     'webm': 'audio/webm',
 }
+
+# 直链有效期（秒）：网易云/QQ 官方 vkey 直链通常 20 分钟~数小时内失效，
+# 保守按 15 分钟判定过期，避免把已经死掉的直链继续下发给浏览器（播放中途自行停止的主因）
+DIRECT_URL_TTL = int(os.environ.get('MUSICDL_DIRECT_URL_TTL', '900'))
+
+# 内置默认封面（取不到封面时兜底展示，深/浅色主题下均可见）
+DEFAULT_COVER_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" width="300" height="300">'
+    '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">'
+    '<stop offset="0%" stop-color="#1f2937"/><stop offset="100%" stop-color="#111827"/>'
+    '</linearGradient></defs>'
+    '<rect width="300" height="300" fill="url(#g)"/>'
+    '<circle cx="150" cy="150" r="86" fill="none" stroke="#10b981" stroke-width="2" opacity="0.45"/>'
+    '<circle cx="150" cy="150" r="64" fill="none" stroke="#10b981" stroke-width="1.5" opacity="0.28"/>'
+    '<path d="M126 196V116l58-14v72" fill="none" stroke="#34d399" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>'
+    '<circle cx="114" cy="198" r="14" fill="#34d399"/>'
+    '<circle cx="172" cy="176" r="14" fill="#34d399"/>'
+    '</svg>'
+)
 
 
 # Client Manager
@@ -668,7 +688,7 @@ def resolve_kuwo_direct_url(song_name, singers='', song_id=None):
             play_url_api = f"http://antiserver.kuwo.cn/anti.s?type=convert_url&rid={rid}&format=mp3&response=url"
             play_resp = requests.get(play_url_api, timeout=(2, 3), headers={'User-Agent': 'Mozilla/5.0'})
             res_url = play_resp.text.strip()
-            if res_url.startswith('http') and not any(fake_id in res_url for fake_id in ['588957081', '563182854']):
+            if res_url.startswith('http') and not any(fake_id in res_url for fake_id in ['588957081', '563182854']) and not is_probably_dead_url(res_url):
                 try:
                     head_resp = requests.head(res_url, timeout=2, headers={'User-Agent': 'Mozilla/5.0'})
                     clen = int(head_resp.headers.get('Content-Length', 0) or 0)
@@ -718,6 +738,8 @@ def resolve_kuwo_direct_url(song_name, singers='', song_id=None):
                     # 坚决过滤酷我官方下架假音频 (588957081 / 563182854 提示音 "当前音乐已从酷我音乐下线")
                     if any(fake_id in res_url for fake_id in ['588957081', '563182854']):
                         continue
+                    if is_probably_dead_url(res_url):
+                        continue
                     try:
                         head_resp = requests.head(res_url, timeout=2, headers={'User-Agent': 'Mozilla/5.0'})
                         clen = int(head_resp.headers.get('Content-Length', 0) or 0)
@@ -732,19 +754,144 @@ def resolve_kuwo_direct_url(song_name, singers='', song_id=None):
     return None
 
 
-def resolve_qq_fast_url(song_mid):
-    """QQ 音乐通过备用开放接口秒级获取播放直链（配置合理超时与快速重试）"""
-    if not song_mid:
+# ---------------------------------------------------------------------------
+# QQ 直链解析：多通道容错 + 内存缓存
+# 单一第三方接口一旦抖动，全部 QQ 曲目都会跌落网易云通道，导致「QQ 歌单播网易云」
+# ---------------------------------------------------------------------------
+_QQ_URL_CACHE = {}
+_QQ_URL_CACHE_LOCK = threading.Lock()
+
+
+def _qq_cached_url(song_mid):
+    with _QQ_URL_CACHE_LOCK:
+        item = _QQ_URL_CACHE.get(str(song_mid))
+    if not item:
         return None
-    for attempt in range(2):
-        try:
-            r = requests.get(f'https://api.xunhuisi.store/API/QQMusic/Song.php?mid={song_mid}&type=json', timeout=(3, 7)).json()
-            u = r.get('music_url')
-            if u and str(u).startswith('http'):
-                return u
-        except Exception:
-            continue
+    url, ts = item
+    if not url or (time.time() - ts) > DIRECT_URL_TTL:
+        return None
+    return url
+
+
+def _qq_store_url(song_mid, url):
+    if not song_mid or not url:
+        return
+    with _QQ_URL_CACHE_LOCK:
+        _QQ_URL_CACHE[str(song_mid)] = (url, time.time())
+        if len(_QQ_URL_CACHE) > 800:
+            for key in list(_QQ_URL_CACHE.keys())[:200]:
+                _QQ_URL_CACHE.pop(key, None)
+
+
+def _qq_url_from_xunhuisi(song_mid):
+    """第三方巡回寺接口（快，约 1~2 秒）"""
+    try:
+        r = requests.get(f'https://api.xunhuisi.store/API/QQMusic/Song.php?mid={song_mid}&type=json',
+                         timeout=(3, 7), verify=False).json()
+        u = r.get('music_url') or r.get('url')
+        if u and str(u).startswith('http'):
+            return str(u)
+    except Exception:
+        pass
     return None
+
+
+def _qq_url_from_official(song_mid):
+    """本项目自带的 QQ 官方 vkey 通道（无需任何第三方接口，约 3~6 秒）"""
+    try:
+        client = MANAGER.get_client('QQMusicClient')
+        info = client._parsewithofficialapiv1({'mid': str(song_mid)})
+        url = getattr(info, 'download_url', '') or ''
+        if str(url).startswith('http'):
+            return str(url)
+    except Exception:
+        pass
+    return None
+
+
+def resolve_qq_fast_url(song_mid):
+    """按 mid 获取 QQ 音乐直链：缓存 → 巡回寺 → 官方 vkey 三级容错"""
+    song_mid = str(song_mid or '').strip()
+    if not song_mid or song_mid.lower() in {'none', 'null'}:
+        return None
+
+    cached = _qq_cached_url(song_mid)
+    if cached:
+        return cached
+
+    for provider in (_qq_url_from_xunhuisi, _qq_url_from_official):
+        url = provider(song_mid)
+        if url:
+            _qq_store_url(song_mid, url)
+            return url
+    return None
+
+
+def build_qq_search_payload(query, num_per_page=8, page_num=1):
+    """按 QQ 官方移动端规范构造搜索请求体（缺 searchid/sign 时接口直接返回 2001）"""
+    params = {
+        'searchid': QQMusicClientUtils.randomsearchid(),
+        'query': query,
+        'search_type': 0,
+        'num_per_page': num_per_page,
+        'page_num': page_num,
+        'highlight': 1,
+        'grp': 1,
+    }
+    return QQMusicClientUtils.buildrequestdata(
+        params=params,
+        module="music.search.SearchCgiService",
+        method="DoSearchForQQMusicMobile",
+    )
+
+
+def search_qq_songs(query, num_per_page=8, timeout=(3, 5)):
+    """QQ 官方移动端搜索，返回 item_song 列表"""
+    if not query:
+        return []
+    try:
+        payload = build_qq_search_payload(query, num_per_page=num_per_page)
+        resp = requests.post(
+            QQMusicClientUtils.endpoint,
+            data=json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode('utf-8'),
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'},
+            timeout=timeout,
+            verify=False,
+        ).json()
+        node = resp.get('music.search.SearchCgiService.DoSearchForQQMusicMobile') or {}
+        body = (node.get('data') or {}).get('body') or {}
+        return body.get('item_song') or []
+    except Exception:
+        return []
+
+
+def search_qq_mid_by_name(query, timeout=(2, 4)):
+    """smartbox 联想搜索兜底：QQ 主搜接口被限流（返回 2001）时仍能拿到 mid"""
+    if not query:
+        return []
+    try:
+        resp = requests.get(
+            'https://c.y.qq.com/splcloud/fcgi-bin/smartbox_new.fcg',
+            params={'key': query, 'format': 'json', 'g_tk': '5381', 'hostUin': '0',
+                    'inCharset': 'utf8', 'outCharset': 'utf-8', 'platform': 'yqq', 'needNewCode': '0'},
+            headers={'Referer': 'https://y.qq.com/', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'},
+            timeout=timeout,
+        ).json()
+        items = (((resp.get('data') or {}).get('song') or {}).get('itemlist') or [])
+        return [{'mid': i.get('mid'), 'name': i.get('name')} for i in items if i.get('mid')]
+    except Exception:
+        return []
+
+
+def fetch_qq_song_meta(song_mid):
+    """按 mid 获取 QQ 曲目元数据（含专辑 mid，用于拼封面）"""
+    song_mid = str(song_mid or '').strip()
+    if not song_mid:
+        return {}
+    try:
+        return MANAGER.get_client('QQMusicClient')._getsongmetainfo(song_mid) or {}
+    except Exception:
+        return {}
 
 
 def safe_dict_extract(d, keys, default=None):
@@ -810,98 +957,173 @@ def compute_match_score(song_name, singers, album, cand_name, cand_singers, cand
     return max(0, score)
 
 
+def strip_bracket_suffix(name):
+    cleaned = re.sub(r'[\(（\[【].*?[\)）\]】]', '', str(name or '')).strip().lower()
+    return cleaned or str(name or '').strip().lower()
+
+
 def resolve_by_qq_search(song_name, singers='', album=''):
     """通过 QQ 音乐官方移动端检索对齐 mid，按匹配度最高算法获取正品直链"""
     if not song_name:
         return None
     s_name, c_singer = clean_music_query(song_name, singers)
     query = f"{s_name} {c_singer}".strip() if c_singer else s_name
-    url = "https://u.y.qq.com/cgi-bin/musicu.fcg"
-    payload = {
-        "comm": {"ct": "19", "cv": "1859", "uin": "0"},
-        "music.search.SearchCgiService.DoSearchForQQMusicMobile": {
-            "method": "DoSearchForQQMusicMobile",
-            "module": "music.search.SearchCgiService",
-            "param": {"search_type": 0, "query": query, "page_num": 1, "num_per_page": 8}
-        }
-    }
-    try:
-        r = requests.post(url, json=payload, timeout=(3, 5)).json()
-        items = safe_dict_extract(r, ["music.search.SearchCgiService.DoSearchForQQMusicMobile", "data", "body", "item_song"], [])
-        candidates = []
-        for item in (items or []):
-            cand_name = str(item.get("title", "")).replace("<em>", "").replace("</em>", "")
-            cand_singers = [s.get("name") for s in (item.get("singer", []) or []) if isinstance(s, dict) and s.get("name")]
-            cand_album = str(safe_dict_extract(item, ["album", "name"], "") or item.get("albumname") or "")
-            score = compute_match_score(song_name, singers, album, cand_name, cand_singers, cand_album)
-            mid = item.get("mid")
-            if score > 0 and mid:
-                candidates.append((score, mid))
+    candidates = []
+    for item in search_qq_songs(query, num_per_page=8):
+        cand_name = str(item.get("title", "")).replace("<em>", "").replace("</em>", "")
+        cand_singers = [s.get("name") for s in (item.get("singer", []) or []) if isinstance(s, dict) and s.get("name")]
+        cand_album = str(safe_dict_extract(item, ["album", "name"], "") or item.get("albumname") or "")
+        score = compute_match_score(song_name, singers, album, cand_name, cand_singers, cand_album)
+        mid = item.get("mid") or item.get("songmid")
+        if score > 0 and mid:
+            candidates.append((score, mid))
 
-        # 按匹配度从高到低排序，优先取匹配度最高的一首
-        candidates.sort(key=lambda x: x[0], reverse=True)
-        for score, mid in candidates:
-            u = resolve_qq_fast_url(mid)
-            if u:
-                return u
-    except Exception:
-        pass
+    # 主搜接口被 QQ 风控限流（返回 2001）时，用 smartbox 联想搜索兜底拿 mid，
+    # 再用曲目元数据复核歌手，避免拿到同名翻唱
+    if not candidates:
+        target_name = strip_bracket_suffix(song_name)
+        for cand in search_qq_mid_by_name(query)[:4]:
+            cand_name = str(cand.get('name') or '')
+            if not cand_name or strip_bracket_suffix(cand_name) != target_name:
+                continue
+            meta = fetch_qq_song_meta(cand.get('mid'))
+            meta_singers = [s.get('name') for s in (meta.get('singer') or []) if isinstance(s, dict) and s.get('name')]
+            if meta_singers and not is_singer_match(singers, meta_singers, song_name, cand_name):
+                continue
+            candidates.append((80.0, cand.get('mid')))
+            break
+
+    # 按匹配度从高到低排序，优先取匹配度最高的一首
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    for score, mid in candidates:
+        u = resolve_qq_fast_url(mid)
+        if u:
+            return u
     return None
 
 
+HTTPS_SAFE_HOSTS = ('qqmusic.qq.com', 'gtimg.cn', 'music.126.net', 'music.163.com')
+
+
+def normalize_http_url(url):
+    """已知支持 https 的音乐 CDN 升级为 https：https 站点下 http 资源会被浏览器当作混合内容拦截"""
+    url = str(url or '').strip()
+    if url.startswith('http://') and any(host in url.split('/')[2] for host in HTTPS_SAFE_HOSTS):
+        return 'https://' + url[len('http://'):]
+    return url
+
+
+def is_valid_qq_cover(url):
+    """校验 QQ 封面地址是否为有效专辑图（album_mid 缺失时会拼出必然 404 的 M000.jpg）"""
+    return bool(re.match(r'^https?://[^/]*gtimg\.cn/music/photo_new/T002R\d+x\d+M000[A-Za-z0-9]+\.jpg', str(url or '')))
+
+
+def build_qq_cover_url(album_mid, size=300):
+    album_mid = str(album_mid or '').strip()
+    if not album_mid or album_mid.lower() in {'none', 'null'}:
+        return ''
+    return f"https://y.gtimg.cn/music/photo_new/T002R{size}x{size}M000{album_mid}.jpg"
+
+
+_COVER_CACHE = {}
+_COVER_CACHE_LOCK = threading.Lock()
+COVER_MISS_TTL = 600
+
+
+def _cover_cache_get(key):
+    with _COVER_CACHE_LOCK:
+        item = _COVER_CACHE.get(key)
+    if not item:
+        return None
+    url, ts = item
+    if url == '' and (time.time() - ts) > COVER_MISS_TTL:
+        return None
+    return url
+
+
+def _cover_cache_set(key, url):
+    with _COVER_CACHE_LOCK:
+        _COVER_CACHE[key] = (url or '', time.time())
+        if len(_COVER_CACHE) > 1500:
+            for k in list(_COVER_CACHE.keys())[:300]:
+                _COVER_CACHE.pop(k, None)
+
+
 def resolve_fast_cover(song_name, singers='', identifier='', album=''):
-    """极速对齐获取歌曲的 300x300 原厂官方高清专辑封面"""
+    """极速对齐获取歌曲的 300x300 原厂官方高清专辑封面，全部走 https"""
     if not song_name:
         return ''
+
+    cache_key = f"{song_name}|{singers}|{identifier}"
+    cached = _cover_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    result = ''
 
     # 1. 若有网易云纯数字 ID，直接调用网易云详情接口获取官方高清封面
     if identifier and str(identifier).isdigit():
         try:
-            r = requests.get(f'http://music.163.com/api/song/detail/?id={identifier}&ids=[{identifier}]', timeout=(2, 3)).json()
+            r = requests.get(f'https://music.163.com/api/song/detail/?id={identifier}&ids=[{identifier}]',
+                             timeout=(2, 3), verify=False).json()
             songs = r.get('songs', [])
             if songs:
                 pic = songs[0].get('album', {}).get('picUrl')
                 if pic and str(pic).startswith('http'):
-                    return str(pic)
+                    result = normalize_http_url(pic)
         except Exception:
             pass
 
-    # 2. 通过 QQ 音乐极速检索匹配专辑 mid，拼接原厂官方 300x300 高清图
+    # 2. 通过 QQ 音乐官方检索匹配专辑 mid，拼接原厂官方 300x300 高清图
     s_name, c_singer = clean_music_query(song_name, singers)
     query = f"{s_name} {c_singer}".strip() if c_singer else s_name
-    url = "https://u.y.qq.com/cgi-bin/musicu.fcg"
-    payload = {
-        "comm": {"ct": "19", "cv": "1859", "uin": "0"},
-        "music.search.SearchCgiService.DoSearchForQQMusicMobile": {
-            "method": "DoSearchForQQMusicMobile",
-            "module": "music.search.SearchCgiService",
-            "param": {"search_type": 0, "query": query, "page_num": 1, "num_per_page": 3}
-        }
-    }
-    try:
-        r = requests.post(url, json=payload, timeout=(2, 3)).json()
-        items = safe_dict_extract(r, ["music.search.SearchCgiService.DoSearchForQQMusicMobile", "data", "body", "item_song"], [])
-        if items:
-            for item in items:
-                alb_mid = item.get('album', {}).get('mid')
-                if alb_mid and str(alb_mid).strip():
-                    return f"https://y.qq.com/music/photo_new/T002R300x300M000{alb_mid}.jpg"
-    except Exception:
-        pass
 
-    # 3. 通过网易云搜索兜底获取专辑图片
-    try:
-        w_url = f"http://music.163.com/api/search/get/web?s={urllib.parse.quote(query)}&type=1&offset=0&total=true&limit=1"
-        wr = requests.get(w_url, timeout=(2, 3)).json()
-        songs = wr.get('result', {}).get('songs', [])
-        if songs:
-            pic = songs[0].get('album', {}).get('artist', {}).get('img1v1Url')
-            if pic and str(pic).startswith('http'):
-                return str(pic)
-    except Exception:
-        pass
+    if not result:
+        for item in search_qq_songs(query, num_per_page=5):
+            cand_name = str(item.get('title', '')).replace('<em>', '').replace('</em>', '')
+            cand_singers = [s.get('name') for s in (item.get('singer', []) or []) if isinstance(s, dict) and s.get('name')]
+            if not is_singer_match(singers, cand_singers, song_name, cand_name):
+                continue
+            cover = build_qq_cover_url(safe_dict_extract(item, ['album', 'mid'], ''), size=300)
+            if cover:
+                result = cover
+                break
 
-    return ''
+    # 3. 主搜接口被限流时，用 smartbox 拿 mid，再查曲目详情补出专辑 mid
+    if not result:
+        for cand in search_qq_mid_by_name(query)[:3]:
+            meta = fetch_qq_song_meta(cand.get('mid'))
+            meta_singers = [s.get('name') for s in (meta.get('singer') or []) if isinstance(s, dict) and s.get('name')]
+            if meta_singers and not is_singer_match(singers, meta_singers, song_name, cand.get('name')):
+                continue
+            cover = build_qq_cover_url(safe_dict_extract(meta, ['album', 'mid'], ''), size=300)
+            if cover:
+                result = cover
+                break
+
+    # 4. 网易云兜底：先搜 song id，再用详情接口取专辑图（搜索结果里没有 picUrl）
+    if not result:
+        try:
+            w_url = f"https://music.163.com/api/search/get/web?s={urllib.parse.quote(query)}&type=1&offset=0&total=true&limit=3"
+            wr = requests.get(w_url, timeout=(2, 3), verify=False).json()
+            for song in (wr.get('result', {}).get('songs', []) or []):
+                song_id = song.get('id')
+                if not song_id:
+                    continue
+                detail = requests.get(f'https://music.163.com/api/song/detail/?id={song_id}&ids=[{song_id}]',
+                                      timeout=(2, 3), verify=False).json()
+                for item in (detail.get('songs') or []):
+                    pic = (item.get('album') or {}).get('picUrl')
+                    if pic and str(pic).startswith('http'):
+                        result = normalize_http_url(pic)
+                        break
+                if result:
+                    break
+        except Exception:
+            pass
+
+    _cover_cache_set(cache_key, result)
+    return result
 
 
 def resolve_qq_official_lrc(song_mid):
@@ -1123,11 +1345,54 @@ def resolve_by_netease_search(song_name, singers='', album=''):
     return None
 
 
+def is_probably_dead_url(url):
+    """识别「看起来是直链但浏览器必然拿不到音频」的地址，避免下发后播放直接失败"""
+    clean = str(url or '').split('?')[0].lower()
+    if not clean.startswith('http'):
+        return True
+    # 酷我 car-er.kuwo.cn/.../track 这类地址需要客户端鉴权，浏览器直连一律 403
+    if 'kuwo.cn' in clean and clean.endswith('/track'):
+        return True
+    return False
+
+
+def cached_direct_url(song):
+    """读取曲目已缓存的直链，超过有效期的直链一律视为失效（否则播放到一半会自行停止）"""
+    url = str(getattr(song, 'download_url', '') or '')
+    if not url.startswith('http'):
+        return ''
+    if is_probably_dead_url(url):
+        return ''
+    ts = getattr(song, '_direct_url_ts', 0) or 0
+    if not ts:
+        # 首次使用记账：源站客户端搜索时已给出的直链默认视为新鲜
+        try:
+            song._direct_url_ts = time.time()
+        except Exception:
+            pass
+        return url
+    if (time.time() - ts) <= DIRECT_URL_TTL:
+        return url
+    return ''
+
+
+def remember_direct_url(song, url):
+    """记录直链解析时间，供后续判断是否过期"""
+    if not url:
+        return ''
+    song.download_url = url
+    try:
+        song._direct_url_ts = time.time()
+    except Exception:
+        pass
+    return url
+
+
 def resolve_instant_stream(song, entry):
     """按平台精准定位直链：原歌单平台优先直达，对应歌手与专辑严格对齐，最高匹配度解析"""
-    url = getattr(song, 'download_url', None)
-    if url and str(url).startswith('http'):
-        return url
+    cached = cached_direct_url(song)
+    if cached:
+        return cached
 
     raw_search = getattr(song, 'raw_data', {}).get('search', {}) if hasattr(song, 'raw_data') else {}
     source = entry.get('source', '') or getattr(song, 'source', '')
@@ -1135,17 +1400,15 @@ def resolve_instant_stream(song, entry):
 
     # 1.【歌单平台绝对优先】若歌单来自 QQ 音乐，100% 直奔 QQ 音乐官方原版直通！
     if source == 'QQMusicClient' or 'qq' in str(source).lower():
-        mid = song.identifier or raw_search.get('mid') or raw_search.get('songmid')
+        mid = getattr(song, 'identifier', '') or raw_search.get('mid') or raw_search.get('songmid')
         if mid:
             url = resolve_qq_fast_url(mid)
             if url:
-                song.download_url = url
-                return url
+                return remember_direct_url(song, url)
         # 自带 mid 遇到偶发抖动或无有效 mid 时，在 QQ 音乐本源平台内进行匹配度最高对齐直连
         url = resolve_by_qq_search(song.song_name, song.singers, album=song_album)
         if url:
-            song.download_url = url
-            return url
+            return remember_direct_url(song, url)
 
     # 2.【歌单平台绝对优先】若歌单来自网易云音乐，100% 直奔网易云官方原版直通！
     if source == 'NeteaseMusicClient' or '163' in str(source).lower() or 'netease' in str(source).lower():
@@ -1153,36 +1416,30 @@ def resolve_instant_stream(song, entry):
         if song_id and str(song_id).isdigit():
             url = resolve_netease_direct_url(song_id)
             if url:
-                song.download_url = url
-                return url
+                return remember_direct_url(song, url)
         url = resolve_by_netease_search(song.song_name, song.singers, album=song_album)
         if url:
-            song.download_url = url
-            return url
+            return remember_direct_url(song, url)
 
     # 3.【歌单平台绝对优先】若歌单来自酷我音乐，直接按酷我官方解析！
     if source == 'KuwoMusicClient' or 'kuwo' in str(source).lower():
         song_id = getattr(song, 'identifier', '') or raw_search.get('MUSICRID') or raw_search.get('musicrid')
         url = resolve_kuwo_direct_url(song.song_name, song.singers, song_id=song_id)
         if url:
-            song.download_url = url
-            return url
+            return remember_direct_url(song, url)
 
     # 4. 跨平台兜底（仅在原平台未解析出直链时）：严格同歌手正版对齐，绝不拿翻唱充数！
     url = resolve_by_netease_search(song.song_name, song.singers, album=song_album)
     if url:
-        song.download_url = url
-        return url
+        return remember_direct_url(song, url)
 
     url = resolve_by_qq_search(song.song_name, song.singers, album=song_album)
     if url:
-        song.download_url = url
-        return url
+        return remember_direct_url(song, url)
 
     url = resolve_kuwo_direct_url(song.song_name, song.singers)
     if url:
-        song.download_url = url
-        return url
+        return remember_direct_url(song, url)
 
     return url
 
@@ -1191,13 +1448,15 @@ def resolve_instant_stream(song, entry):
 def api_stream(token):
     entry = REGISTRY.get(token)
     if not entry:
-        return '音频已失效或未找到', 404
+        return jsonify({'error': '音频已失效或未找到', 'code': 'token_missing'}), 404
 
     song = entry['song_info']
     url = resolve_instant_stream(song, entry)
 
     if not url or not str(url).startswith('http'):
-        return '无效的音频直链', 404
+        # 明确告知前端解析失败，让播放器走「重新解析 / 跳过」逻辑，而不是卡在无声状态
+        return jsonify({'error': f'《{getattr(song, "song_name", "")}》暂无可用音频直链',
+                        'code': 'no_direct_url'}), 503
 
     is_download = request.args.get('download') == '1'
     embed_lyric = request.args.get('embed_lyric') == '1'
@@ -1219,8 +1478,13 @@ def api_stream(token):
     song.ext = orig_ext
 
     # 在线试听：直接 302 重定向至 CDN，让浏览器原生硬解流式播放，彻底免除反代二次中转缓冲、避免 WSGI chunked 协议冲突与海外地域封锁！
+    # 注意：必须禁止缓存该 302，否则直链过期后浏览器会复用旧的跳转目标，导致点了播放没有任何声音
     if not is_download and not embed_lyric and target_format in {'', 'original'}:
-        return redirect(url, code=302)
+        resp = redirect(normalize_http_url(url), code=302)
+        resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        resp.headers['Pragma'] = 'no-cache'
+        resp.headers['Expires'] = '0'
+        return resp
 
     # 规范化 upstream_headers，根据真实直链域名配置，坚决避免跨平台 referer 引发 CDN 403 Forbidden
     upstream_headers = {
@@ -1311,31 +1575,45 @@ def api_stream(token):
     return Response(stream_with_context(generate()), status=up.status_code, headers=resp_headers)
 
 
+def default_cover_response(max_age=300):
+    """取不到封面时返回内置默认封面图，前端永远不会出现裂图"""
+    return Response(DEFAULT_COVER_SVG, status=200, headers={
+        'Content-Type': 'image/svg+xml; charset=utf-8',
+        'Cache-Control': f'public, max-age={max_age}',
+    })
+
+
 @app.route('/api/cover/<token>')
 def api_cover(token):
     entry = REGISTRY.get(token)
     song = entry['song_info'] if entry else None
 
-    url = getattr(song, 'cover_url', None) if song else None
-    if (not url or not str(url).startswith('http')) and song:
-        s_name = getattr(song, 'song_name', '')
-        s_singers = getattr(song, 'singers', '')
-        s_id = getattr(song, 'identifier', '')
-        s_album = getattr(song, 'album', '')
+    if not song:
+        return default_cover_response()
+
+    s_name = getattr(song, 'song_name', '')
+    s_singers = getattr(song, 'singers', '')
+    s_id = getattr(song, 'identifier', '')
+    s_album = getattr(song, 'album', '')
+
+    url = normalize_http_url(getattr(song, 'cover_url', '') or '')
+    # 已有地址若明显无效（如专辑 mid 缺失拼出的 M000.jpg），重新解析而不是直接下发死链
+    if (not url.startswith('http')) or (('gtimg.cn' in url) and not is_valid_qq_cover(url)):
         url = resolve_fast_cover(s_name, s_singers, s_id, s_album)
         if url:
             song.cover_url = url
             REGISTRY._save_cache()
-
-    if not url or not str(url).startswith('http'):
-        return '', 404
+        else:
+            song.cover_url = ''
+            REGISTRY._save_cache()
+            return default_cover_response()
 
     # 规范反盗链 Referer 请求头
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
     }
-    if 'qq.com' in url:
+    if 'qq.com' in url or 'gtimg.cn' in url:
         headers['Referer'] = 'https://y.qq.com/'
     elif '126.net' in url or '163.com' in url:
         headers['Referer'] = 'https://music.163.com/'
@@ -1348,9 +1626,13 @@ def api_cover(token):
             return Response(up.content, status=200,
                             headers={'Content-Type': up.headers.get('Content-Type', 'image/jpeg'),
                                      'Cache-Control': 'public, max-age=86400'})
-        return redirect(url, code=302)
     except Exception:
-        return redirect(url, code=302)
+        pass
+
+    # 源站取图失败：清掉失效地址，下次请求会重新解析；本次先给默认封面
+    song.cover_url = ''
+    REGISTRY._save_cache()
+    return default_cover_response()
 
 
 @app.route('/api/lyric/<token>')
@@ -1909,34 +2191,106 @@ def api_download_local():
     return jsonify({'success': True, 'message': '已加入后台下载队列'})
 
 
+def resolve_same_platform_url(song_name, singers, source, identifier='', album=''):
+    """在原歌单平台内部重新解析直链，保证「QQ 歌单的歌就还是 QQ 音乐」"""
+    src = str(source or '').lower()
+    ident = str(identifier or '').strip()
+    if ident.lower() in {'none', 'null'}:
+        ident = ''
+
+    if source == 'QQMusicClient' or 'qq' in src:
+        if ident:
+            url = resolve_qq_fast_url(ident)
+            if url:
+                return url
+        return resolve_by_qq_search(song_name, singers, album=album)
+
+    if source == 'NeteaseMusicClient' or '163' in src or 'netease' in src:
+        if ident.isdigit():
+            url = resolve_netease_direct_url(ident)
+            if url:
+                return url
+        return resolve_by_netease_search(song_name, singers, album=album)
+
+    if source == 'KuwoMusicClient' or 'kuwo' in src:
+        return resolve_kuwo_direct_url(song_name, singers, song_id=ident or None)
+
+    return None
+
+
+def resolve_cross_platform_url(song_name, singers, album='', skip_source=''):
+    """跨平台兜底解析，返回 (直链, 实际音源平台)"""
+    candidates = [
+        ('NeteaseMusicClient', lambda: resolve_by_netease_search(song_name, singers, album=album)),
+        ('QQMusicClient', lambda: resolve_by_qq_search(song_name, singers, album=album)),
+        ('KuwoMusicClient', lambda: resolve_kuwo_direct_url(song_name, singers)),
+    ]
+    for platform, resolver in candidates:
+        if platform == skip_source:
+            continue
+        try:
+            url = resolver()
+        except Exception:
+            url = None
+        if url:
+            return url, platform
+    return None, ''
+
+
+def sniff_audio_ext(url, default='mp3'):
+    clean = str(url or '').split('?')[0].lower()
+    for ext in ('flac', 'm4a', 'aac', 'wav', 'ogg', 'mp3'):
+        if clean.endswith('.' + ext):
+            return ext
+    return default
+
+
 @app.route('/api/track/resolve', methods=['POST'])
 def api_track_resolve():
-    """当曲目的 token 或源站直链失效时，根据歌曲名与歌手即时自愈重新连接最新可用音源"""
+    """曲目直链自愈：优先在原平台重新解析，绝不把 QQ 歌单的歌悄悄换成网易云"""
     data = request.get_json(silent=True) or {}
     song_name = str(data.get('song_name', '')).strip()
     singers = str(data.get('singers', '')).strip()
     source = str(data.get('source', '')).strip()
+    identifier = str(data.get('identifier', '')).strip()
+    album = str(data.get('album', '')).strip()
     if not song_name:
         return jsonify({'error': '缺少歌曲名'}), 400
 
-    # 秒级极速获取可用直链，绝不调用慢速全局 search 导致网关 504 切断
-    direct_url = resolve_by_netease_search(song_name, singers) or resolve_kuwo_direct_url(song_name, singers)
-    if direct_url:
-        new_song = SongInfo(
-            source='KuwoMusicClient' if 'kuwo' in direct_url else 'NeteaseMusicClient',
-            song_name=song_name,
-            singers=singers or '未知歌手',
-            download_url=direct_url
-        )
-        new_song.ext = 'mp3'
-        new_cover = resolve_fast_cover(song_name, singers)
-        if new_cover:
-            new_song.cover_url = new_cover
-        new_token = REGISTRY.add(new_song, new_song.source)
-        payload = track_to_payload(new_song, new_token, new_song.source)
-        return jsonify({'success': True, 'track': payload})
+    # 1. 原平台优先（平台身份不变）
+    direct_url = resolve_same_platform_url(song_name, singers, source, identifier=identifier, album=album)
+    actual_source = source if direct_url else ''
 
-    return jsonify({'error': f'未检索到可用的音源直链: {song_name}'}), 200
+    # 2. 原平台确实拿不到可用直链时，才跨平台兜底
+    if not direct_url:
+        direct_url, actual_source = resolve_cross_platform_url(song_name, singers, album=album, skip_source=source)
+
+    if not direct_url:
+        return jsonify({'error': f'未检索到可用的音源直链: {song_name}'}), 200
+
+    # 曲目平台身份保持为歌单来源平台，实际音源单独标注，避免「串源」误解
+    new_song = SongInfo(
+        source=source or actual_source,
+        song_name=song_name,
+        singers=singers or '未知歌手',
+        album=album,
+        download_url=direct_url,
+    )
+    new_song.identifier = identifier
+    new_song.ext = sniff_audio_ext(direct_url)
+    remember_direct_url(new_song, direct_url)
+
+    new_cover = resolve_fast_cover(song_name, singers)
+    if new_cover:
+        new_song.cover_url = new_cover
+
+    new_token = REGISTRY.add(new_song, new_song.source)
+    payload = track_to_payload(new_song, new_token, new_song.source)
+    payload['actual_source'] = actual_source or source
+    payload['actual_source_label'] = SUPPORTED_SOURCES.get(actual_source or source, {}).get('label', actual_source or source)
+    payload['cross_source'] = bool(source and actual_source and actual_source != source)
+    payload['resume_position'] = float(data.get('position') or 0)
+    return jsonify({'success': True, 'track': payload})
 
 
 def run_server(host='127.0.0.1', port=5050, work_dir=None):

@@ -877,22 +877,240 @@ function closeFullscreenPlayer() {
   state.isFullscreenOpen = false;
 }
 
+// 内置默认封面：源站取不到封面时兜底，前端永不出现裂图
+const DEFAULT_COVER = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" width="300" height="300">'
+  + '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#1f2937"/><stop offset="100%" stop-color="#111827"/></linearGradient></defs>'
+  + '<rect width="300" height="300" fill="url(#g)"/>'
+  + '<circle cx="150" cy="150" r="86" fill="none" stroke="#10b981" stroke-width="2" opacity="0.45"/>'
+  + '<circle cx="150" cy="150" r="64" fill="none" stroke="#10b981" stroke-width="1.5" opacity="0.28"/>'
+  + '<path d="M126 196V116l58-14v72" fill="none" stroke="#34d399" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>'
+  + '<circle cx="114" cy="198" r="14" fill="#34d399"/><circle cx="172" cy="176" r="14" fill="#34d399"/>'
+  + '</svg>'
+);
+
+function useDefaultCover(img) {
+  if (!img || img.dataset.fallbackApplied === '1') return;
+  img.dataset.fallbackApplied = '1';
+  img.src = DEFAULT_COVER;
+  if (img === playerCover && fsBgBlur) {
+    fsBgBlur.style.backgroundImage = 'none';
+  }
+}
+
+// 图片加载失败统一兜底：源站 404、反盗链、域名被墙都能自动落到默认封面
+[playerCover, fsCoverImg].forEach(img => {
+  if (!img) return;
+  img.addEventListener('error', () => useDefaultCover(img));
+});
+
 function updatePlayerCover(coverUrl) {
-  const finalCover = coverUrl || 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 60 60%22><rect fill=%22%23e2e8f0%22 width=%2260%22 height=%2260%22/></svg>';
+  const hasCover = Boolean(coverUrl);
+  const finalCover = hasCover ? coverUrl : DEFAULT_COVER;
   if (playerCover) {
+    playerCover.dataset.fallbackApplied = '';
     playerCover.src = finalCover;
   }
   if (fsCoverImg) {
+    fsCoverImg.dataset.fallbackApplied = '';
     fsCoverImg.src = finalCover;
   }
   if (fsBgBlur) {
-    if (coverUrl && coverUrl.startsWith('http') || (coverUrl && coverUrl.startsWith('/api/cover/'))) {
-      fsBgBlur.style.backgroundImage = `url('${coverUrl}')`;
-    } else {
-      fsBgBlur.style.backgroundImage = 'none';
-    }
+    fsBgBlur.style.backgroundImage = hasCover ? `url('${coverUrl}')` : 'none';
   }
 }
+
+// ============================================================================
+// 播放引擎：断流自愈 + 停滞看门狗 + 断点续播
+// 目标：播放中途停止时能自动（或点一下播放键）恢复，而不是只能切歌
+// ============================================================================
+const STALL_LIMIT_MS = 12000;      // 连续 12 秒无进度即判定为卡死
+const MAX_RECOVER_TIMES = 3;       // 单曲自动恢复次数上限
+
+let lastProgressAt = Date.now();
+let lastProgressTime = 0;
+let recoveryInFlight = false;
+
+function markProgress() {
+  lastProgressAt = Date.now();
+  lastProgressTime = audioElement.currentTime || 0;
+}
+
+function audioSupportedUrl(url) {
+  // 加时间戳强制绕过浏览器对旧 302 跳转与过期直链的缓存
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}_t=${Date.now()}`;
+}
+
+function loadAudioSource(url, startAt = 0) {
+  return new Promise(resolve => {
+    if (!url) {
+      resolve(false);
+      return;
+    }
+    let settled = false;
+    const onLoaded = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (startAt > 0.5) {
+        try { audioElement.currentTime = startAt; } catch (e) {}
+      }
+      audioElement.play().then(() => {
+        updatePlayPauseIcon(true);
+        markProgress();
+        resolve('played');
+      }).catch(err => {
+        // 浏览器自动播放策略拦截：通道本身是好的，等用户点播放即可，不能当作失败
+        if (err && err.name === 'NotAllowedError') {
+          updatePlayPauseIcon(false);
+          resolve('blocked');
+          return;
+        }
+        console.warn('[Player] 自动播放失败:', err);
+        updatePlayPauseIcon(false);
+        resolve('');
+      });
+    };
+    const onError = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(false);
+    };
+    function cleanup() {
+      audioElement.removeEventListener('loadedmetadata', onLoaded);
+      audioElement.removeEventListener('error', onError);
+    }
+
+    audioElement.addEventListener('loadedmetadata', onLoaded);
+    audioElement.addEventListener('error', onError);
+    audioElement.src = audioSupportedUrl(url);
+    try { audioElement.load(); } catch (e) {}
+
+    // 兜底：8 秒内连元数据都拿不到，按失败处理（交给自愈逻辑）
+    setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(false);
+    }, 8000);
+  });
+}
+
+async function safePlay() {
+  try {
+    await audioElement.play();
+    markProgress();
+    return true;
+  } catch (err) {
+    console.warn('[Player] play() 被拒绝:', err && err.name, err && err.message);
+    return false;
+  }
+}
+
+// 统一自愈入口：原平台优先重新解析 → 断点续播
+async function recoverPlayback(reason = 'error') {
+  const track = state.currentTrack;
+  if (!track || recoveryInFlight) return;
+
+  const attempts = (track._recoverCount || 0) + 1;
+  if (attempts > MAX_RECOVER_TIMES) {
+    updatePlayPauseIcon(false);
+    showToast(`《${track.song_name}》多次恢复失败，请切换其他歌曲或稍后重试`);
+    return;
+  }
+  track._recoverCount = attempts;
+
+  const resumeAt = Number.isFinite(audioElement.currentTime) ? audioElement.currentTime : 0;
+  recoveryInFlight = true;
+  showResolvingState(track.song_name, true);
+
+  try {
+    const data = await safeFetchJson('/api/track/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        song_name: track.song_name,
+        singers: track.singers,
+        album: track.album || '',
+        source: track.source || '',
+        identifier: track.identifier || '',
+        position: resumeAt
+      })
+    });
+
+    if (!data || !data.success || !data.track) {
+      throw new Error((data && data.error) || '未找到可用音源');
+    }
+
+    const resolved = data.track;
+    // 平台身份沿用歌单原始平台，实际音源单独提示，避免「QQ 歌单显示成网易云」
+    const newTrack = Object.assign({}, track, resolved, {
+      source: track.source || resolved.source,
+      source_label: track.source_label || resolved.source_label,
+      source_short: track.source_short || resolved.source_short,
+      from_playlist: track.from_playlist,
+      _recoverCount: attempts,
+      _healTried: true
+    });
+
+    if (state.currentTrackIndex >= 0 && state.currentTrackIndex < state.tracks.length) {
+      state.tracks[state.currentTrackIndex] = newTrack;
+    }
+    state.currentTrack = newTrack;
+    updatePlaylistTrackCache(track, newTrack);
+
+    playerTitle.innerText = newTrack.song_name;
+    playerArtist.innerText = `${newTrack.singers} · ${newTrack.source_label}`;
+    fsHeaderTitle.innerText = newTrack.song_name;
+    fsHeaderArtist.innerText = `${newTrack.singers} · ${newTrack.source_label}`;
+    updatePlayerCover(newTrack.cover_url || (newTrack.token ? `/api/cover/${newTrack.token}` : ''));
+    loadLyric(newTrack.token);
+
+    const ok = await loadAudioSource(newTrack.stream_url, resumeAt);
+    if (ok === 'played') {
+      const crossTip = newTrack.cross_source ? `（备用音源：${newTrack.actual_source_label || '其他平台'}）` : '';
+      showToast(`已恢复《${newTrack.song_name}》播放${crossTip}`);
+      preloadAndHealNextTrack();
+    } else if (ok === 'blocked') {
+      showToast(`《${newTrack.song_name}》音源已就绪，点击播放继续`);
+    } else {
+      throw new Error('音源通道连接失败');
+    }
+  } catch (err) {
+    console.warn('[Recover] 失败:', err);
+    updatePlayPauseIcon(false);
+    playerArtist.innerText = `${track.singers} · ${track.source_label || ''}`;
+    fsHeaderArtist.innerText = `${track.singers} · ${track.source_label || ''}`;
+    showToast(`《${track.song_name}》恢复失败：${err.message || '网络异常'}`);
+  } finally {
+    recoveryInFlight = false;
+    markProgress();
+  }
+}
+
+// 停滞看门狗：播放中进度长时间不前进（CDN 断流/直链过期）时自动恢复
+setInterval(() => {
+  if (!state.currentTrack || recoveryInFlight) return;
+  if (audioElement.paused || audioElement.ended) {
+    lastProgressAt = Date.now();
+    return;
+  }
+  const advanced = Math.abs((audioElement.currentTime || 0) - lastProgressTime) > 0.25;
+  if (advanced) {
+    markProgress();
+    return;
+  }
+  // 刚开始播放时给更宽裕的首缓冲时间，避免慢网络下误判断流
+  const limit = (audioElement.currentTime || 0) < 3 ? 22000 : STALL_LIMIT_MS;
+  const stalledFor = Date.now() - lastProgressAt;
+  if (stalledFor >= limit && audioElement.readyState < 3) {
+    console.warn(`[Watchdog] 播放停滞 ${Math.round(stalledFor / 1000)}s 且无可用缓冲，开始自愈`);
+    recoverPlayback('stalled');
+  }
+}, 3000);
+
 
 function playTrack(index, autoOpenPlayer = true) {
   if (index < 0 || index >= state.tracks.length) return;
@@ -900,6 +1118,7 @@ function playTrack(index, autoOpenPlayer = true) {
   const track = state.tracks[index];
   state.currentTrack = track;
   track._healTried = false; // 用户主动点击播放，重置自愈状态，保证重试机会
+  track._recoverCount = 0;
 
   // 1. Update list highlight
   document.querySelectorAll('.track-row').forEach(r => r.classList.remove('playing'));
@@ -940,13 +1159,13 @@ function playTrack(index, autoOpenPlayer = true) {
   // 4. Set audio stream and start playing
   state.predictedNextIndex = -1;
   if (track.stream_url) {
-    audioElement.src = track.stream_url;
-    audioElement.play().then(() => {
-      updatePlayPauseIcon(true);
-      preloadAndHealNextTrack();
-    }).catch(e => {
-      console.error('Play error:', e);
-      preloadAndHealNextTrack();
+    loadAudioSource(track.stream_url, 0).then(ok => {
+      if (ok) {
+        preloadAndHealNextTrack();
+      } else {
+        // 直链无法播放（过期/失效）：直接走自愈，避免用户点了播放却毫无反应
+        recoverPlayback('load-failed');
+      }
     });
   } else {
     // 尚未获取流链接（例如歌单刚秒开载入中），显示转圈缓冲态，绝不设空src避免浏览器触发假错误
@@ -1009,13 +1228,18 @@ function updatePlayPauseIcon(isPlaying, isLoading = false) {
   }
 }
 
-playPauseBtn.onclick = () => {
+playPauseBtn.onclick = async () => {
   if (!audioElement.src) {
-    if (state.tracks.length > 0) playTrack(0, true);
+    if (state.tracks.length > 0) playTrack(Math.max(state.currentTrackIndex, 0), true);
     return;
   }
   if (audioElement.paused) {
-    audioElement.play();
+    const ok = await safePlay();
+    if (!ok) {
+      // play() 被拒绝通常意味着直链已失效：立即重新解析并断点续播
+      await recoverPlayback('play-rejected');
+      return;
+    }
     updatePlayPauseIcon(true);
   } else {
     audioElement.pause();
@@ -1084,6 +1308,28 @@ function resolveNextTrackIndex(forceRecompute = false) {
 let prehealTimer = null;
 let prehealAbortController = null;
 
+// 只探测响应头就立即断开，避免预检把下一首整首歌下载下来抢占当前播放带宽
+async function probeStreamHealth(url, outerSignal) {
+  const ctrl = new AbortController();
+  const relayAbort = () => { try { ctrl.abort(); } catch (e) {} };
+  if (outerSignal) outerSignal.addEventListener('abort', relayAbort);
+  try {
+    const res = await fetch(audioSupportedUrl(url), {
+      method: 'GET',
+      headers: { 'Range': 'bytes=0-0' },
+      signal: ctrl.signal
+    });
+    const status = res.status;
+    try { if (res.body && res.body.cancel) res.body.cancel().catch(() => {}); } catch (e) {}
+    try { ctrl.abort(); } catch (e) {}
+    return status;
+  } catch (err) {
+    return 0;
+  } finally {
+    if (outerSignal) outerSignal.removeEventListener('abort', relayAbort);
+  }
+}
+
 function preloadAndHealNextTrack() {
   if (prehealTimer) {
     clearTimeout(prehealTimer);
@@ -1112,34 +1358,42 @@ function preloadAndHealNextTrack() {
 
     try {
       // 1. 发起极速轻量 Range 探测 (只拉取第 0 字节，流量 < 1KB)
-      const testRes = await fetch(nextTrack.stream_url, {
-        method: 'GET',
-        headers: { 'Range': 'bytes=0-0' },
-        signal
-      });
+      const status = await probeStreamHealth(nextTrack.stream_url, signal);
+      if (signal.aborted) return;
 
-      // 2. 如果返回 200 或 206，说明直链健康有效，静默待命
-      if (testRes.ok) {
+      // 2. 探测成功（200/206）说明直链健康有效，静默待命；0 表示探测被取消/网络抖动，不做判断
+      if (status >= 200 && status < 400) {
+        return;
+      }
+      if (!status) {
         return;
       }
 
       // 3. 链接失效 (404/403/502等)，启动后台静默自愈 (选项 A：完全静默无感知)
-      console.log(`[Pre-Heal] 检测到下一首《${nextTrack.song_name}》直链失效 (${testRes.status})，正在后台自愈...`);
+      console.log(`[Pre-Heal] 检测到下一首《${nextTrack.song_name}》直链失效 (${status})，正在后台自愈...`);
       const resolveRes = await fetch('/api/track/resolve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           song_name: nextTrack.song_name,
           singers: nextTrack.singers,
-          source: nextTrack.source
+          album: nextTrack.album || '',
+          source: nextTrack.source || '',
+          identifier: nextTrack.identifier || ''
         }),
         signal
       });
 
       const resolveData = await resolveRes.json();
       if (resolveData.success && resolveData.track) {
-        const healedTrack = resolveData.track;
-        healedTrack._healed = true;
+        // 平台身份沿用歌单原平台，只替换可用直链与令牌
+        const healedTrack = Object.assign({}, nextTrack, resolveData.track, {
+          source: nextTrack.source || resolveData.track.source,
+          source_label: nextTrack.source_label || resolveData.track.source_label,
+          source_short: nextTrack.source_short || resolveData.track.source_short,
+          from_playlist: nextTrack.from_playlist,
+          _healed: true
+        });
 
         // 更新 tracks 数组对应项为最新健康通道
         state.tracks[nextIdx] = healedTrack;
@@ -1159,7 +1413,7 @@ function playNextTrack() {
   if (state.tracks.length === 0) return;
   if (state.playMode === 'one') {
     audioElement.currentTime = 0;
-    audioElement.play().catch(e => console.warn('Replay error:', e));
+    safePlay().then(ok => { if (!ok) recoverPlayback('replay'); });
     return;
   }
   const nextIdx = resolveNextTrackIndex(false);
@@ -1231,74 +1485,16 @@ function showResolvingState(songName, isResolving, isSuccess = false, msg = '') 
   }
 }
 
-audioElement.onerror = async () => {
+audioElement.onerror = () => {
+  // 播放通道出错（直链过期/CDN 断流）：交给统一自愈入口，首次静默恢复
   if (!state.currentTrack) return;
-  const track = state.currentTrack;
-  if (track._healTried) {
-    showResolvingState(track.song_name, false, false, '通道重连失败，可能源站已下架');
-    showToast(`《${track.song_name}》音源通道重连失败，可能源站已下架`);
-    updatePlayPauseIcon(false);
-    return;
-  }
-  track._healTried = true;
-
-  // 醒目提示：显示居中横幅、副标题动态更新、播放按钮转圈
-  showResolvingState(track.song_name, true);
-  showToast(`正在智能恢复《${track.song_name}》的可用音源通道...`);
-
-  try {
-    const data = await safeFetchJson('/api/track/resolve', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        song_name: track.song_name,
-        singers: track.singers,
-        source: track.source
-      })
-    });
-    if (data.success && data.track) {
-      const newTrack = data.track;
-      newTrack._healTried = true;
-      state.tracks[state.currentTrackIndex] = newTrack;
-      state.currentTrack = newTrack;
-      updatePlaylistTrackCache(track, newTrack);
-
-      playerTitle.innerText = newTrack.song_name;
-      playerArtist.innerText = `${newTrack.singers} · ${newTrack.source_label}`;
-      fsHeaderTitle.innerText = newTrack.song_name;
-      fsHeaderArtist.innerText = `${newTrack.singers} · ${newTrack.source_label}`;
-      if (newTrack.cover_url) {
-        playerCover.src = newTrack.cover_url;
-        fsCoverImg.src = newTrack.cover_url;
-        fsBgBlur.style.backgroundImage = `url('${newTrack.cover_url}')`;
-      }
-
-      showResolvingState(newTrack.song_name, false, true, '最新通道已连接并开始播放');
-      audioElement.src = newTrack.stream_url;
-      audioElement.play().then(() => {
-        updatePlayPauseIcon(true);
-        showToast(`已成功恢复《${newTrack.song_name}》最新通道并开始播放`);
-        preloadAndHealNextTrack();
-      }).catch(err => {
-        console.warn('Autoplay error:', err);
-        updatePlayPauseIcon(false);
-      });
-      loadLyric(newTrack.token);
-    } else {
-      showResolvingState(track.song_name, false, false, '音源暂无法自动重连');
-      showToast(`《${track.song_name}》音源暂无法自动重连，可在【我的歌单】点击“刷新同步”`);
-      playerArtist.innerText = `${track.singers} · ${track.source_label}`;
-      fsHeaderArtist.innerText = `${track.singers} · ${track.source_label}`;
-      updatePlayPauseIcon(false);
-    }
-  } catch (err) {
-    showResolvingState(track.song_name, false, false, err.message || '网络连接异常');
-    showToast(`《${track.song_name}》连接异常: ${err.message}`);
-    playerArtist.innerText = `${track.singers} · ${track.source_label}`;
-    fsHeaderArtist.innerText = `${track.singers} · ${track.source_label}`;
-    updatePlayPauseIcon(false);
-  }
+  recoverPlayback('media-error');
 };
+
+// 只有「确实在前进」的事件才刷新看门狗基准；
+// waiting/stalled 表示正在缓冲（即没有前进），绝不能刷新基准，否则永远探测不到卡死
+audioElement.onplaying = () => { markProgress(); };
+audioElement.onseeked = () => { markProgress(); };
 
 audioElement.onplay = () => {
   updatePlayPauseIcon(true);
@@ -1319,6 +1515,7 @@ audioElement.onended = () => {
 };
 
 audioElement.ontimeupdate = () => {
+  markProgress();
   if (!audioElement.duration) return;
   const current = audioElement.currentTime;
   const duration = audioElement.duration;
@@ -1749,13 +1946,12 @@ async function loadAndPlayPlaylist(tracks, targetIdx = 0) {
           if (playerArtist) playerArtist.innerText = artistText;
           if (fsHeaderArtist) fsHeaderArtist.innerText = artistText;
 
-          audioElement.src = curTrack.stream_url;
-          audioElement.play().then(() => {
-            updatePlayPauseIcon(true);
-            preloadAndHealNextTrack();
-          }).catch(err => {
-            console.warn('Autoplay failed:', err);
-            updatePlayPauseIcon(false);
+          loadAudioSource(curTrack.stream_url, 0).then(ok => {
+            if (ok) {
+              preloadAndHealNextTrack();
+            } else {
+              recoverPlayback('playlist-load-failed');
+            }
           });
           loadLyric(curTrack.token);
           fetch(`/api/track/info/${curTrack.token}`).then(r => r.json()).then(latest => {
