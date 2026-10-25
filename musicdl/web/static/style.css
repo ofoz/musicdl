@@ -303,3 +303,469 @@ th.whitespace-nowrap, td.whitespace-nowrap {
 .pl-rename-btn:hover {
   transform: scale(1.1);
 }
+
+/* 11. 全屏播放器背景纱幕 (浅色 / 夜间双主题) */
+#fsBgVeil {
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.82) 0%,
+    rgba(240, 253, 244, 0.6) 50%,
+    rgba(255, 255, 255, 0.9) 100%
+  );
+}
+
+/* ============================================================
+   夜间模式 (Night Theme)
+   亮度控制在"暗而不黑"，保留翡翠绿品牌色作为点缀
+   ============================================================ */
+html.dark {
+  color-scheme: dark;
+
+  --dk-bg: #1b2129;
+  --dk-surface: #232a33;
+  --dk-surface-2: #2b333d;
+  --dk-surface-3: #333c47;
+  --dk-border: #3a4551;
+  --dk-border-em: #2f5b4a;
+  --dk-text: #e6ecf3;
+  --dk-text-2: #c3cdd8;
+  --dk-text-3: #a9b5c2;
+  --dk-muted: #8b98a6;
+}
+
+/* 页面底色：覆盖 body 上的浅色渐变 */
+html.dark body {
+  background-image: none !important;
+  background-color: var(--dk-bg) !important;
+  color: var(--dk-text) !important;
+}
+
+/* 全屏播放器底色与纱幕 */
+html.dark #fullscreenPlayer {
+  background-color: rgba(27, 33, 41, 0.97) !important;
+}
+
+html.dark #fsBgVeil {
+  background: linear-gradient(
+    to bottom,
+    rgba(31, 38, 47, 0.9) 0%,
+    rgba(28, 38, 34, 0.86) 52%,
+    rgba(27, 33, 41, 0.95) 100%
+  );
+}
+
+/* ---------- 浅色实心面板 ---------- */
+html.dark .bg-white,
+html.dark .bg-white\/95,
+html.dark .bg-white\/90,
+html.dark .bg-white\/80,
+html.dark .bg-white\/70,
+html.dark .bg-white\/60 {
+  background-color: var(--dk-surface) !important;
+}
+
+html.dark .bg-slate-50,
+html.dark .bg-slate-50\/50,
+html.dark .bg-slate-50\/70,
+html.dark .bg-slate-50\/80,
+html.dark .bg-slate-50\/90 {
+  background-color: var(--dk-bg) !important;
+}
+
+html.dark .bg-slate-100,
+html.dark .bg-slate-100\/90 {
+  background-color: var(--dk-surface-2) !important;
+}
+
+html.dark .bg-slate-200 {
+  background-color: var(--dk-surface-3) !important;
+}
+
+/* ---------- 翡翠绿浅色底：改为半透明品牌光晕 ---------- */
+html.dark .bg-emerald-50,
+html.dark .bg-emerald-50\/50,
+html.dark .bg-emerald-50\/70,
+html.dark .bg-emerald-50\/80,
+html.dark .bg-emerald-50\/90 {
+  background-color: rgba(16, 185, 129, 0.1) !important;
+}
+
+html.dark .bg-emerald-100,
+html.dark .bg-emerald-100\/70,
+html.dark .bg-emerald-100\/80 {
+  background-color: rgba(16, 185, 129, 0.18) !important;
+}
+
+/* ---------- 其它浅色提示底 ---------- */
+html.dark .bg-sky-50 {
+  background-color: rgba(56, 189, 248, 0.12) !important;
+}
+
+html.dark .bg-rose-50,
+html.dark .bg-rose-50\/40,
+html.dark .bg-rose-100 {
+  background-color: rgba(244, 63, 94, 0.12) !important;
+}
+
+html.dark .bg-amber-50,
+html.dark .bg-amber-100,
+html.dark .bg-amber-200\/60 {
+  background-color: rgba(245, 158, 11, 0.12) !important;
+}
+
+/* ---------- 文字：深色 → 浅色 ---------- */
+html.dark .text-slate-800,
+html.dark .text-slate-700 {
+  color: var(--dk-text) !important;
+}
+
+html.dark .text-slate-600 {
+  color: var(--dk-text-2) !important;
+}
+
+html.dark .text-slate-500 {
+  color: var(--dk-text-3) !important;
+}
+
+html.dark .text-slate-400 {
+  color: var(--dk-muted) !important;
+}
+
+html.dark .text-slate-300 {
+  color: #6f7c8a !important;
+}
+
+html.dark .text-slate-200 {
+  color: #5d6a77 !important;
+}
+
+/* 品牌绿文字：夜间提亮，保证深底对比度 */
+html.dark .text-emerald-800,
+html.dark .text-emerald-700,
+html.dark .text-emerald-700\/80 {
+  color: #6ee7b7 !important;
+}
+
+html.dark .text-emerald-600,
+html.dark .text-emerald-600\/70 {
+  color: #34d399 !important;
+}
+
+/* 暖色 / 警示色文字提亮 */
+html.dark .text-amber-800,
+html.dark .text-amber-700 {
+  color: #fcd34d !important;
+}
+
+html.dark .text-rose-800,
+html.dark .text-rose-700,
+html.dark .text-rose-600 {
+  color: #fda4af !important;
+}
+
+html.dark .text-sky-800,
+html.dark .text-sky-700 {
+  color: #7dd3fc !important;
+}
+
+/* ---------- 边框 ---------- */
+html.dark .border-slate-100,
+html.dark .border-slate-200,
+html.dark .border-slate-200\/80,
+html.dark .border-slate-200\/90,
+html.dark .border-slate-300 {
+  border-color: var(--dk-border) !important;
+}
+
+html.dark .border-emerald-100,
+html.dark .border-emerald-100\/80,
+html.dark .border-emerald-100\/90,
+html.dark .border-emerald-200,
+html.dark .border-emerald-200\/60,
+html.dark .border-emerald-200\/70,
+html.dark .border-emerald-200\/80,
+html.dark .border-emerald-300 {
+  border-color: var(--dk-border-em) !important;
+}
+
+html.dark .border-emerald-400,
+html.dark .border-emerald-400\/90,
+html.dark .border-emerald-500 {
+  border-color: #10b981 !important;
+}
+
+html.dark .border-amber-200,
+html.dark .border-amber-300 {
+  border-color: #6b5323 !important;
+}
+
+html.dark .border-rose-200,
+html.dark .border-rose-300,
+html.dark .border-rose-400 {
+  border-color: #7a3a44 !important;
+}
+
+html.dark .border-sky-200 {
+  border-color: #2c4a5e !important;
+}
+
+html.dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--dk-border) !important;
+}
+
+/* ---------- 输入框 ---------- */
+html.dark input[type="text"],
+html.dark input[type="search"],
+html.dark textarea,
+html.dark select {
+  background-color: var(--dk-surface-2) !important;
+  color: var(--dk-text) !important;
+  border-color: var(--dk-border) !important;
+}
+
+html.dark input::placeholder,
+html.dark textarea::placeholder {
+  color: #6f7c8a !important;
+}
+
+/* ---------- 滚动条 ---------- */
+html.dark ::-webkit-scrollbar-track {
+  background: rgba(43, 51, 61, 0.9);
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+  background: rgba(120, 135, 150, 0.45);
+}
+
+/* ---------- 自定义组件 ---------- */
+html.dark .source-pill.active {
+  background: rgba(16, 185, 129, 0.14);
+  border-color: var(--dk-border-em);
+  color: #6ee7b7;
+}
+
+html.dark .source-pill.inactive {
+  background: var(--dk-surface-2);
+  border-color: var(--dk-border);
+  color: var(--dk-text-3);
+}
+
+html.dark .source-pill.inactive:hover {
+  background: var(--dk-surface-3);
+  color: var(--dk-text);
+}
+
+html.dark .track-row:hover {
+  background-color: rgba(16, 185, 129, 0.07);
+}
+
+html.dark .track-row.playing {
+  background-color: rgba(16, 185, 129, 0.12);
+}
+
+html.dark .lyric-line {
+  color: var(--dk-text-2);
+}
+
+html.dark .lyric-line:hover {
+  color: #34d399;
+}
+
+html.dark .lyric-line.active {
+  color: #34d399;
+}
+
+html.dark .playlist-track-item:hover {
+  background-color: rgba(16, 185, 129, 0.07);
+}
+
+/* 歌词玻璃盒：夜间改为深色弥散 */
+html.dark .fs-lyric-box {
+  background: radial-gradient(
+    ellipse 85% 75% at 50% 50%,
+    rgba(38, 46, 56, 0.82) 0%,
+    rgba(32, 40, 48, 0.55) 48%,
+    rgba(16, 185, 129, 0.06) 75%,
+    transparent 100%
+  );
+  box-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.4);
+}
+
+html.dark .fs-lyric-line {
+  color: #7d8b9a;
+}
+
+html.dark .fs-lyric-line:hover {
+  color: #34d399;
+}
+
+html.dark .fs-lyric-active {
+  color: #34d399 !important;
+}
+
+/* 品牌字：夜间换成浅色渐变，否则深底上的深色渐变字会消失 */
+html.dark #brandLogoText {
+  background-image: linear-gradient(90deg, #e6ecf3 0%, #a7f3d0 55%, #99f6e4 100%) !important;
+}
+
+/* 黑胶唱片：夜间加重阴影，避免糊在深底上 */
+html.dark .vinyl-disc {
+  box-shadow: 0 20px 45px -10px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(16, 185, 129, 0.3);
+}
+
+/* ============================================================
+   12. 自定义滑杆 (播放进度 / 音量)
+   --pct 由 app.js 实时写入，代表已播放(或已调音量)的百分比
+   ============================================================ */
+.sf-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+
+  --range-h: 4px;
+  --range-base: #e2e8f0;
+  --range-fill: #059669;
+  --range-thumb: #059669;
+  --range-halo: rgba(5, 150, 105, 0.14);
+}
+
+/* ---------- WebKit / Blink ---------- */
+.sf-range::-webkit-slider-runnable-track {
+  height: var(--range-h);
+  border-radius: 9999px;
+  background: linear-gradient(
+    to right,
+    var(--range-fill) 0 var(--pct, 0%),
+    var(--range-base) var(--pct, 0%) 100%
+  );
+  transition: height 0.16s ease;
+}
+
+.sf-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 11px;
+  height: 11px;
+  margin-top: calc((var(--range-h) - 11px) / 2);
+  border: none;
+  border-radius: 50%;
+  background: var(--range-thumb);
+  box-shadow: 0 0 0 3px var(--range-halo);
+  opacity: 0;
+  transition: opacity 0.16s ease, margin-top 0.16s ease;
+}
+
+/* 悬浮 / 键盘聚焦 / 按下：轨道加粗 2px，滑块浮现 */
+.sf-range:hover::-webkit-slider-runnable-track,
+.sf-range:focus-visible::-webkit-slider-runnable-track,
+.sf-range:active::-webkit-slider-runnable-track {
+  height: calc(var(--range-h) + 2px);
+}
+
+.sf-range:hover::-webkit-slider-thumb,
+.sf-range:focus-visible::-webkit-slider-thumb,
+.sf-range:active::-webkit-slider-thumb {
+  opacity: 1;
+  margin-top: calc((var(--range-h) + 2px - 11px) / 2);
+}
+
+.sf-range:focus-visible {
+  outline: 2px solid rgba(5, 150, 105, 0.4);
+  outline-offset: 2px;
+  border-radius: 9999px;
+}
+
+/* ---------- Firefox ---------- */
+.sf-range::-moz-range-track {
+  height: var(--range-h);
+  border-radius: 9999px;
+  background: var(--range-base);
+}
+
+.sf-range::-moz-range-progress {
+  height: var(--range-h);
+  border-radius: 9999px;
+  background: var(--range-fill);
+}
+
+.sf-range::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border: none;
+  border-radius: 50%;
+  background: var(--range-thumb);
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+
+.sf-range:hover::-moz-range-thumb,
+.sf-range:focus-visible::-moz-range-thumb,
+.sf-range:active::-moz-range-thumb {
+  opacity: 1;
+}
+
+/* 触屏设备没有 hover：滑块常显，否则手指拖动时看不到落点 */
+@media (hover: none) {
+  .sf-range::-webkit-slider-thumb {
+    opacity: 1;
+    margin-top: calc((var(--range-h) - 11px) / 2);
+  }
+  .sf-range::-moz-range-thumb {
+    opacity: 1;
+  }
+}
+
+/* 全屏大播放器：轨道加厚一档，底色带一点薄荷绿 */
+.sf-range--lg {
+  --range-h: 6px;
+  --range-base: #d1fae5;
+}
+
+/* ---------- 夜间模式 ---------- */
+html.dark .sf-range {
+  --range-base: #3a4551;
+  --range-fill: #34d399;
+  --range-thumb: #6ee7b7;
+  --range-halo: rgba(110, 231, 183, 0.16);
+}
+
+html.dark .sf-range--lg {
+  --range-base: #2f5b4a;
+}
+
+
+/* ---------- 音量纵向滑杆：水平滑杆旋转 -90°，音量自下而上 ---------- */
+.vol-v {
+  position: relative;
+  width: 20px;
+  height: 88px;
+}
+
+.vol-v input[type="range"] {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 88px;
+  height: 18px;
+  margin: 0;
+  transform: translate(-50%, -50%) rotate(-90deg);
+}
+
+html.dark #volumePanel {
+  background: var(--dk-surface) !important;
+  border-color: var(--dk-border) !important;
+}
+
+/* 纵向面板里的滑块常显，提示可拖动 */
+.vol-v input[type="range"]::-webkit-slider-thumb {
+  opacity: 1;
+}
+
+.vol-v input[type="range"]::-moz-range-thumb {
+  opacity: 1;
+}

@@ -124,6 +124,106 @@ const fsPauseIcon = document.getElementById('fsPauseIcon');
 const fsNextBtn = document.getElementById('fsNextBtn');
 const fsVolumeSlider = document.getElementById('fsVolumeSlider');
 
+// 主题切换（日间 / 夜间）
+const themeToggleBtn = document.getElementById('themeToggleBtn');
+const themeMoonIcon = document.getElementById('themeMoonIcon');
+const themeSunIcon = document.getElementById('themeSunIcon');
+
+// ===== 主题切换逻辑 =====
+const THEME_STORAGE_KEY = 'soundflow-theme';
+
+function currentTheme() {
+  return document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+}
+
+function applyTheme(theme, persist = true) {
+  const isDark = theme === 'dark';
+  document.documentElement.classList.toggle('dark', isDark);
+  // 浅色态显示月亮（点击进入夜间），夜间态显示太阳（点击回到白天）
+  if (themeMoonIcon) themeMoonIcon.classList.toggle('hidden', isDark);
+  if (themeSunIcon) themeSunIcon.classList.toggle('hidden', !isDark);
+  if (themeToggleBtn) {
+    const label = isDark ? '切换日间模式' : '切换夜间模式';
+    themeToggleBtn.title = label;
+    themeToggleBtn.setAttribute('aria-label', label);
+  }
+  if (persist) {
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch (e) { /* 隐私模式等场景忽略 */ }
+  }
+}
+
+if (themeToggleBtn) {
+  themeToggleBtn.onclick = () => {
+    const next = currentTheme() === 'dark' ? 'light' : 'dark';
+    applyTheme(next);
+    showToast(next === 'dark' ? '已切换到夜间模式 🌙' : '已切换到日间模式 ☀️');
+  };
+}
+// 首屏同步图标状态（<head> 的预加载脚本已挂好 dark 类，这里只做 UI 同步）
+applyTheme(currentTheme(), false);
+
+// ===== 网页标题跑马灯：展示当前播放歌曲并整体循环滚动 =====
+const BASE_TITLE = 'SoundFlow · 音悦台';
+const TITLE_SCROLL_STEP_MS = 400;
+const TITLE_LOOP_GAP = '      '; // 一轮结束到下一轮之间的留白
+
+let titleTimer = null;
+let titleScrollOffset = 0;
+let titleRollText = '';
+
+function buildTitleText() {
+  const track = state.currentTrack;
+  if (!track) return '';
+  const prefix = audioElement.paused ? '⏸' : '▶';
+  const name = track.song_name || '';
+  const singer = track.singers ? ` - ${track.singers}` : '';
+  return `${prefix} ${name}${singer} · ${BASE_TITLE}`;
+}
+
+function stopTitleRoll() {
+  if (titleTimer) {
+    clearInterval(titleTimer);
+    titleTimer = null;
+  }
+  titleScrollOffset = 0;
+}
+
+function renderTitleFrame() {
+  if (!titleRollText) return;
+  const sequence = titleRollText + TITLE_LOOP_GAP;
+  const doubled = sequence + sequence;
+  document.title = doubled.substring(titleScrollOffset, titleScrollOffset + titleRollText.length);
+  titleScrollOffset = (titleScrollOffset + 1) % sequence.length;
+}
+
+// 歌曲或播放状态变化时重建标题；播放中才滚动，暂停时静止展示完整标题
+function refreshTitle() {
+  stopTitleRoll();
+  titleRollText = buildTitleText();
+
+  if (!titleRollText) {
+    document.title = BASE_TITLE;
+    return;
+  }
+  if (audioElement.paused) {
+    document.title = titleRollText;
+    return;
+  }
+  renderTitleFrame();
+  titleTimer = setInterval(renderTitleFrame, TITLE_SCROLL_STEP_MS);
+}
+
+// 页面切到后台时停掉定时器省电，回到前台且仍在播放则恢复滚动
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    stopTitleRoll();
+  } else if (titleRollText && !audioElement.paused) {
+    refreshTitle();
+  }
+});
+
 // Format Preference Modal & Badge Elements
 const formatPrefBadge = document.getElementById('formatPrefBadge');
 const currentFormatLabel = document.getElementById('currentFormatLabel');
@@ -1124,6 +1224,8 @@ function playTrack(index, autoOpenPlayer = true) {
   // 3. Update Fullscreen Player details
   fsHeaderTitle.innerText = track.song_name;
   fsHeaderArtist.innerText = `${track.singers} · ${track.source_label || ''}`;
+  // 同步网页标题（含跑马灯滚动）
+  refreshTitle();
   fsSourceBadge.innerText = track.source_label || '主流音源';
   const cleanExtName = (track.ext && track.ext.toLowerCase() !== 'none' && track.ext.toLowerCase() !== 'null') ? track.ext.toUpperCase() : 'HQ';
   const qualityDesc = track.lossless ? '无损原声' : (track.quality_type === 'hq' ? '超高品质' : '标准品质');
@@ -1494,10 +1596,12 @@ audioElement.onplay = () => {
     if (playerArtist) playerArtist.innerText = artistText;
     if (fsHeaderArtist) fsHeaderArtist.innerText = artistText;
   }
+  refreshTitle();
 };
 
 audioElement.onpause = () => {
   updatePlayPauseIcon(false);
+  refreshTitle();
 };
 
 audioElement.onended = () => {
@@ -1513,6 +1617,8 @@ audioElement.ontimeupdate = () => {
   
   seekSlider.value = percent;
   fsSeekSlider.value = percent;
+  setRangeFill(seekSlider, percent);
+  setRangeFill(fsSeekSlider, percent);
 
   const currentFormatted = formatTime(current);
   const durationFormatted = formatTime(duration);
@@ -1525,7 +1631,21 @@ audioElement.ontimeupdate = () => {
   syncLyric(current);
 };
 
+// 滑杆填充：把百分比写进 CSS 变量 --pct，供 .sf-range 的渐变轨道上色
+function setRangeFill(slider, percent) {
+  if (!slider) return;
+  const pct = Number.isFinite(percent) ? Math.min(100, Math.max(0, percent)) : 0;
+  slider.style.setProperty('--pct', pct.toFixed(2) + '%');
+}
+
+function syncVolumeFill(value) {
+  const pct = parseFloat(value) * 100;
+  setRangeFill(volumeSlider, pct);
+  setRangeFill(fsVolumeSlider, pct);
+}
+
 const handleSeek = (slider) => {
+  setRangeFill(slider, parseFloat(slider.value));
   if (!audioElement.duration) return;
   const target = (slider.value / 100) * audioElement.duration;
   audioElement.currentTime = target;
@@ -1534,15 +1654,55 @@ const handleSeek = (slider) => {
 seekSlider.oninput = () => handleSeek(seekSlider);
 fsSeekSlider.oninput = () => handleSeek(fsSeekSlider);
 
+// 新曲目开始载入时清空已播放填充，避免带上一首的进度残影
+audioElement.addEventListener('loadstart', () => {
+  setRangeFill(seekSlider, 0);
+  setRangeFill(fsSeekSlider, 0);
+});
+
 volumeSlider.oninput = () => {
   audioElement.volume = volumeSlider.value;
   fsVolumeSlider.value = volumeSlider.value;
+  syncVolumeFill(volumeSlider.value);
 };
 
 fsVolumeSlider.oninput = () => {
   audioElement.volume = fsVolumeSlider.value;
   volumeSlider.value = fsVolumeSlider.value;
+  syncVolumeFill(fsVolumeSlider.value);
 };
+
+// 音量面板：点击喇叭向上弹出纵向滑杆，点空白处或 Esc 收起（主播放栏与全屏播放器共用一套逻辑）
+function bindVolumePopover(btn, panel) {
+  if (!btn || !panel) return;
+
+  const setOpen = (open) => {
+    panel.classList.toggle('hidden', !open);
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  };
+
+  btn.addEventListener('click', () => {
+    setOpen(panel.classList.contains('hidden'));
+  });
+
+  document.addEventListener('click', (e) => {
+    if (panel.classList.contains('hidden')) return;
+    if (panel.contains(e.target) || btn.contains(e.target)) return;
+    setOpen(false);
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') setOpen(false);
+  });
+}
+
+bindVolumePopover(document.getElementById('volumeBtn'), document.getElementById('volumePanel'));
+bindVolumePopover(document.getElementById('fsVolumeBtn'), document.getElementById('fsVolumePanel'));
+
+// 初始化滑杆填充
+setRangeFill(seekSlider, 0);
+setRangeFill(fsSeekSlider, 0);
+syncVolumeFill(volumeSlider.value);
 
 if (downloadDirectBtn) {
   downloadDirectBtn.onclick = (e) => {
