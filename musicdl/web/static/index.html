@@ -27,7 +27,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="/static/style.css?v=20261025_07">
+  <link rel="stylesheet" href="/static/style.css?v=20261025_15">
 </head>
 <body class="bg-gradient-to-br from-[#f8fafc] via-[#f0fdf4]/50 to-[#f0fdfa]/70 text-slate-800 min-h-screen flex flex-col font-sans selection:bg-emerald-500 selection:text-white pb-28">
 
@@ -35,14 +35,18 @@
   <header class="border-b border-slate-200/80 bg-white/80 backdrop-blur-xl sticky top-0 z-40 shadow-sm shadow-emerald-950/5">
     <div class="max-w-7xl mx-auto px-3.5 sm:px-6 h-14 sm:h-16 flex flex-nowrap items-center justify-between gap-2 sm:gap-4">
       
-      <!-- 品牌 Logo (左侧) -->
+      <!-- 品牌 Logo (左侧) — 点击随时回到主页 -->
       <div class="flex items-center gap-2 sm:gap-2.5 shrink-0">
-        <div class="w-8 h-8 sm:w-10 sm:h-10 rounded-xl sm:rounded-2xl bg-gradient-to-tr from-emerald-500 to-teal-400 flex items-center justify-center shadow-md shadow-emerald-500/25 shrink-0">
-          <svg class="w-4 h-4 sm:w-5 sm:h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/>
-          </svg>
-        </div>
-        <span id="brandLogoText" class="hidden min-[360px]:inline font-bold text-base sm:text-lg tracking-tight bg-gradient-to-r from-slate-900 via-emerald-950 to-teal-800 bg-clip-text text-transparent whitespace-nowrap">SoundFlow</span>
+        <button id="brandHomeBtn" type="button"
+                class="group -m-0.5 p-0.5 flex items-center gap-2 sm:gap-2.5 rounded-xl cursor-pointer select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70 focus-visible:ring-offset-1"
+                title="回到主页" aria-label="回到主页">
+          <span class="w-8 h-8 sm:w-10 sm:h-10 rounded-xl sm:rounded-2xl bg-gradient-to-tr from-emerald-500 to-teal-400 flex items-center justify-center shadow-md shadow-emerald-500/25 shrink-0 transition-transform duration-200 group-hover:scale-105 group-active:scale-95">
+            <svg class="w-4 h-4 sm:w-5 sm:h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/>
+            </svg>
+          </span>
+          <span id="brandLogoText" class="hidden min-[360px]:inline font-bold text-base sm:text-lg tracking-tight bg-gradient-to-r from-slate-900 via-emerald-950 to-teal-800 bg-clip-text text-transparent whitespace-nowrap">SoundFlow</span>
+        </button>
         <!-- 日间 / 夜间主题切换 (紧随品牌名) -->
         <button id="themeToggleBtn" class="flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 bg-white border border-slate-200/90 rounded-xl text-slate-500 hover:text-emerald-600 hover:border-emerald-300 shadow-sm transition shrink-0 select-none" title="切换夜间模式" aria-label="切换夜间模式">
           <svg id="themeMoonIcon" class="w-4 h-4 sm:w-[18px] sm:h-[18px]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -161,15 +165,45 @@
             </thead>
             <tbody id="resultsTableBody" class="divide-y divide-slate-100">
               <tr>
-                <td colspan="7" class="py-20 text-center text-slate-400">
-                  <div class="flex flex-col items-center justify-center gap-2.5">
-                    <div class="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-500 flex items-center justify-center shadow-inner">
-                      <svg class="w-6 h-6 stroke-emerald-500" fill="none" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
-                      </svg>
+                <td colspan="7" class="py-16 sm:py-20 text-center">
+                  <div class="flex flex-col items-center justify-center gap-3">
+
+                    <!-- 图标：品牌渐变 + 柔光扩散 -->
+                    <div class="relative mb-1">
+                      <span class="absolute inset-0 rounded-3xl bg-emerald-400/25 blur-xl scale-125" aria-hidden="true"></span>
+                      <span class="relative w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-400 flex items-center justify-center shadow-lg shadow-emerald-500/30">
+                        <svg class="w-7 h-7 sm:w-8 sm:h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+                        </svg>
+                      </span>
                     </div>
-                    <span class="text-xs sm:text-sm text-slate-600 font-medium text-center px-3 leading-relaxed">输入关键词开始单曲搜索或导入歌单开始畅听</span>
-                    <span class="text-xs text-slate-400 text-center px-3">搜索结果将以流式并发呈现在此处</span>
+
+                    <!-- 主提示：关键词绿色高亮，字号放大一档 -->
+                    <p class="text-[15px] sm:text-lg font-semibold text-slate-700 text-center px-4 leading-relaxed sm:leading-normal tracking-tight"><span class="block sm:inline">输入关键词开始<span class="text-emerald-600">单曲搜索</span></span><span class="block sm:inline"><span class="mr-1 sm:mx-2 text-[15px] sm:text-lg font-normal text-slate-400">或者</span><span class="text-emerald-600">导入歌单</span>开始畅听</span></p>
+
+                    <!-- 操作提示胶囊 -->
+                    <div class="flex flex-wrap items-center justify-center gap-2 px-3">
+                      <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-100 text-[11px] sm:text-xs font-medium text-emerald-700">
+                        <svg class="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M11 18a7 7 0 100-14 7 7 0 000 14z"/>
+                        </svg>
+                        输入后按 Enter 搜索
+                      </span>
+                      <button type="button" id="emptyStateImportBtn"
+                              class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-50 border border-slate-200 text-[11px] sm:text-xs font-medium text-slate-500 hover:text-emerald-700 hover:bg-emerald-50 hover:border-emerald-300 active:scale-95 transition cursor-pointer select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70 focus-visible:ring-offset-1"
+                              title="打开顶部「我的歌单」，在「导入外部新歌单」里粘贴链接即可导入"
+                              aria-label="打开我的歌单去导入歌单">
+                        <svg class="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 010 5.656l-3 3a4 4 0 01-5.656-5.656l1.5-1.5M10.172 13.828a4 4 0 010-5.656l3-3a4 4 0 015.656 5.656l-1.5 1.5"/>
+                        </svg>
+                        点顶部「我的歌单」导入
+                        <svg class="w-3 h-3 shrink-0 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                        </svg>
+                      </button>
+                    </div>
+
+                    <span class="text-[11px] sm:text-xs text-slate-400 text-center px-3">搜索结果将以流式并发呈现在此处</span>
                   </div>
                 </td>
               </tr>
@@ -689,6 +723,45 @@
     </div>
   </div>
 
+  <!-- 收藏到歌单 选择弹窗 -->
+  <div id="favModal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-6 hidden">
+    <div class="bg-white border border-slate-200/90 w-full max-w-md rounded-2xl shadow-2xl p-5 sm:p-6 flex flex-col text-slate-800 space-y-3.5">
+      <div class="w-full flex items-start justify-between gap-3 border-b border-slate-100 pb-3">
+        <div class="flex items-center gap-2 min-w-0">
+          <div class="w-7 h-7 rounded-lg bg-emerald-100/70 border border-emerald-200 flex items-center justify-center text-emerald-700 shrink-0">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/>
+            </svg>
+          </div>
+          <div class="min-w-0">
+            <h3 class="text-sm sm:text-base font-bold text-slate-800">收藏到歌单</h3>
+            <p id="favTrackTitle" class="text-[11px] text-slate-500 truncate">-</p>
+          </div>
+        </div>
+        <button id="closeFavModalBtn" class="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition shrink-0" title="关闭">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <!-- 歌单选择列表 -->
+      <div id="favPlaylistList" class="space-y-1.5 max-h-64 overflow-y-auto pr-1 fs-lyric-scroll"></div>
+
+      <!-- 新建歌单 -->
+      <div class="pt-2 border-t border-slate-100">
+        <div id="favNewForm" class="hidden items-center gap-2">
+          <input type="text" id="favNewNameInput" maxlength="40" placeholder="新歌单名称，如 我的私藏"
+                 class="flex-1 min-w-0 px-3 py-2 text-xs border border-emerald-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/30 text-slate-800 placeholder-slate-400">
+          <button id="favNewConfirmBtn" class="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-xs transition shrink-0">创建并收藏</button>
+          <button id="favNewCancelBtn" class="px-2.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-medium transition shrink-0">取消</button>
+        </div>
+        <button id="favNewBtn" class="w-full py-2 rounded-xl border border-dashed border-emerald-300 text-emerald-700 hover:bg-emerald-50/70 text-xs font-medium transition flex items-center justify-center gap-1.5">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+          <span>新建歌单</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- 轻量 Toast 提示 -->
   <div id="toastContainer" class="fixed bottom-24 right-6 z-50 pointer-events-none space-y-2"></div>
 
@@ -844,6 +917,6 @@
   <audio id="audioElement" preload="none"></audio>
   <script src="/static/libs/qrcode.min.js"></script>
   <script src="/static/libs/jsQR.min.js"></script>
-  <script src="/static/app.js?v=20261025_07"></script>
+  <script src="/static/app.js?v=20261025_15"></script>
 </body>
 </html>

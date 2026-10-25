@@ -280,6 +280,17 @@ const modalPlaylistCustomName = document.getElementById('modalPlaylistCustomName
 const modalImportPlaylistBtn = document.getElementById('modalImportPlaylistBtn');
 const myPlaylistsCardsContainer = document.getElementById('myPlaylistsCardsContainer');
 
+// 收藏到歌单 弹窗元素
+const favModal = document.getElementById('favModal');
+const closeFavModalBtn = document.getElementById('closeFavModalBtn');
+const favTrackTitle = document.getElementById('favTrackTitle');
+const favPlaylistList = document.getElementById('favPlaylistList');
+const favNewBtn = document.getElementById('favNewBtn');
+const favNewForm = document.getElementById('favNewForm');
+const favNewNameInput = document.getElementById('favNewNameInput');
+const favNewConfirmBtn = document.getElementById('favNewConfirmBtn');
+const favNewCancelBtn = document.getElementById('favNewCancelBtn');
+
 // 1. Initial Load & Sources Setup
 async function init() {
   updateFormatBadge();
@@ -664,6 +675,50 @@ function showSearchView() {
   if (playlistView) playlistView.classList.add('hidden');
 }
 
+// 点击 Logo 回到主页：收起所有浮层 → 回到搜索主视图 → 滚回顶部
+// 不打断正在播放的音频，也不清空搜索关键词与结果，方便继续操作
+function goHome() {
+  // 1) 收起全屏播放器
+  try {
+    if (state.isFullscreenOpen) closeFullscreenPlayer();
+  } catch (err) {
+    console.error('goHome: close fullscreen failed', err);
+  }
+
+  // 2) 关闭歌词抽屉
+  if (lyricModal) lyricModal.classList.add('translate-x-full');
+
+  // 3) 关闭各类弹窗
+  try {
+    if (downloadModal && !downloadModal.classList.contains('hidden')) {
+      downloadModal.classList.add('hidden');
+      state.pendingTrack = null;
+    }
+    if (myPlaylistsModal) myPlaylistsModal.classList.add('hidden');
+    if (favModal) closeFavModal();
+    if (qrExportModal && !qrExportModal.classList.contains('hidden')) closeQrExportModal();
+    if (qrScanModal && !qrScanModal.classList.contains('hidden')) stopQrScanner();
+  } catch (err) {
+    console.error('goHome: close overlays failed', err);
+  }
+
+  // 4) 收起音量气泡
+  document.querySelectorAll('#volumePanel, #fsVolumePanel').forEach((p) => {
+    p.classList.add('hidden');
+  });
+
+  // 5) 回到主视图并瞬间置顶
+  showSearchView();
+  window.scrollTo(0, 0);
+  document.documentElement.scrollTop = 0;
+  document.body.scrollTop = 0;
+}
+
+const brandHomeBtn = document.getElementById('brandHomeBtn');
+if (brandHomeBtn) {
+  brandHomeBtn.addEventListener('click', goHome);
+}
+
 // Source Selection Shortcuts
 selectAllCoreBtn.onclick = () => {
   state.activeSources.clear();
@@ -877,6 +932,14 @@ function appendTrackRow(track, index) {
           <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
         </button>
   `;
+  const faved = isTrackFaved(track);
+  const favBtnHtml = `
+        <button class="row-fav-btn p-1.5 rounded-lg transition ${faved ? 'text-rose-500 hover:text-rose-600 hover:bg-rose-50' : 'text-slate-400 hover:text-rose-500 hover:bg-rose-50'}"
+                data-faved="${faved ? '1' : '0'}" aria-pressed="${faved ? 'true' : 'false'}"
+                title="${faved ? FAV_TITLE_ON : FAV_TITLE_OFF}" aria-label="收藏到歌单">
+          <svg class="w-4 h-4" fill="${faved ? 'currentColor' : 'none'}" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>
+        </button>
+  `;
 
   tr.innerHTML = `
     <td class="py-2.5 sm:py-3 px-2 sm:px-3 text-center text-slate-400 text-[11px] sm:text-xs font-mono whitespace-nowrap">${index + 1}</td>
@@ -905,6 +968,7 @@ function appendTrackRow(track, index) {
     </td>
     <td class="py-2.5 sm:py-3 px-1 sm:px-4 text-center whitespace-nowrap">
       <div class="flex items-center justify-center gap-1">
+        ${favBtnHtml}
         <button class="play-btn p-1.5 rounded-lg text-slate-400 hover:text-emerald-700 hover:bg-emerald-100/80 transition" title="立即试听">
           <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
         </button>
@@ -919,6 +983,44 @@ function appendTrackRow(track, index) {
     e.stopPropagation();
     playTrack(index);
   };
+  const rowFavBtn = tr.querySelector('.row-fav-btn');
+  if (rowFavBtn) {
+    rowFavBtn.dataset.favKey = trackFavKey(track);
+    // 单击：直接收藏/取消收藏到默认歌单「我的私藏」（不存在则自动创建）
+    rowFavBtn.onclick = (e) => {
+      e.stopPropagation();
+      // 长按已打开选择面板时，抬手不要再次触发一键收藏
+      if (rowFavBtn.dataset.longPressed === '1') {
+        delete rowFavBtn.dataset.longPressed;
+        return;
+      }
+      quickToggleFav(track);
+    };
+    // 右键：需要挑选其他歌单时打开选择面板
+    rowFavBtn.oncontextmenu = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openFavModal(track);
+    };
+    // 触屏长按：手机端同样能打开选择面板（鼠标端走右键，不参与长按）
+    let favPressTimer = null;
+    rowFavBtn.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse') return;
+      favPressTimer = setTimeout(() => {
+        favPressTimer = null;
+        rowFavBtn.dataset.longPressed = '1';
+        openFavModal(track);
+      }, 550);
+    });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach(evName => {
+      rowFavBtn.addEventListener(evName, () => {
+        if (favPressTimer) {
+          clearTimeout(favPressTimer);
+          favPressTimer = null;
+        }
+      });
+    });
+  }
   const rowDlBtn = tr.querySelector('.row-download-btn');
   if (rowDlBtn) {
     rowDlBtn.onclick = (e) => {
@@ -2169,6 +2271,7 @@ function saveMyPlaylists(list) {
   } catch (e) {
     console.error('Save playlists error:', e);
   }
+  invalidateFavCache();
   updateMyPlaylistsBadge();
 }
 
@@ -2182,6 +2285,296 @@ function updateMyPlaylistsBadge() {
     myPlaylistsCountBadge.classList.add('hidden');
     modalPlTotalBadge.innerText = '0';
   }
+}
+
+// ===== 收藏到歌单 =====
+let favCandidateTrack = null;
+let favKeyCache = null;
+
+// 同一首歌的判定键：优先 source + identifier，回退歌名+歌手
+function trackFavKey(t) {
+  if (!t || typeof t !== 'object') return '';
+  const id = String(t.identifier || '').trim();
+  const src = String(t.source || '').trim();
+  if (id) return `${src}|${id}`;
+  return `${src}|${String(t.song_name || '').trim()}|${String(t.singers || '').trim()}`;
+}
+
+// 所有歌单里已收藏曲目的 key 集合（随歌单变更失效，供逐行渲染 O(1) 查询）
+function invalidateFavCache() {
+  favKeyCache = null;
+}
+
+function getFavedKeySet() {
+  if (favKeyCache) return favKeyCache;
+  const set = new Set();
+  getMyPlaylists().forEach(pl => {
+    (pl.tracks || []).forEach(t => {
+      const key = trackFavKey(t);
+      if (key) set.add(key);
+    });
+  });
+  favKeyCache = set;
+  return set;
+}
+
+function isTrackFaved(track) {
+  const key = trackFavKey(track);
+  return key ? getFavedKeySet().has(key) : false;
+}
+
+// 切换单行爱心按钮的实心/空心与配色
+function applyFavBtnState(btn, faved) {
+  if (!btn) return;
+  btn.dataset.faved = faved ? '1' : '0';
+  btn.setAttribute('aria-pressed', faved ? 'true' : 'false');
+  btn.title = faved ? FAV_TITLE_ON : FAV_TITLE_OFF;
+  btn.classList.toggle('text-rose-500', faved);
+  btn.classList.toggle('text-slate-400', !faved);
+  const svg = btn.querySelector('svg');
+  if (svg) svg.setAttribute('fill', faved ? 'currentColor' : 'none');
+}
+
+// 歌单增删后同步已有结果行的爱心状态
+function refreshRowFavIcons() {
+  const keys = getFavedKeySet();
+  document.querySelectorAll('.row-fav-btn').forEach(btn => {
+    const key = btn.dataset.favKey || '';
+    applyFavBtnState(btn, key ? keys.has(key) : false);
+  });
+}
+
+// 一键收藏的默认歌单
+const DEFAULT_FAV_PLAYLIST = '我的私藏';
+const FAV_TITLE_OFF = `收藏到《${DEFAULT_FAV_PLAYLIST}》（右键可选择其他歌单）`;
+const FAV_TITLE_ON = `已收藏，点击取消（右键管理歌单）`;
+
+// 取默认收藏歌单，缺失则就地创建（不弹窗、不询问）
+function getOrCreateDefaultFavPlaylist(list) {
+  let pl = list.find(p => String(p.name || '').trim() === DEFAULT_FAV_PLAYLIST);
+  if (pl) {
+    pl.tracks = Array.isArray(pl.tracks) ? pl.tracks : [];
+    return { playlist: pl, created: false };
+  }
+  pl = {
+    id: 'pl_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+    name: DEFAULT_FAV_PLAYLIST,
+    hasCustomName: true,
+    source: '本地歌单',
+    source_label: '本地歌单',
+    url: '',
+    createTime: new Date().toLocaleDateString(),
+    status: 'ready',
+    tracks: [],
+    errorMsg: ''
+  };
+  list.unshift(pl);
+  return { playlist: pl, created: true };
+}
+
+// 单击爱心：已收藏则取消（从所有包含它的歌单中移除），未收藏则直接收进默认歌单
+function quickToggleFav(track) {
+  if (!track) return;
+  const key = trackFavKey(track);
+  if (!key) return;
+
+  const list = getMyPlaylists();
+
+  if (isTrackFaved(track)) {
+    let removedFrom = '';
+    list.forEach(pl => {
+      if (!Array.isArray(pl.tracks)) return;
+      const before = pl.tracks.length;
+      pl.tracks = pl.tracks.filter(t => trackFavKey(t) !== key);
+      if (!removedFrom && pl.tracks.length !== before) removedFrom = pl.name;
+    });
+    saveMyPlaylists(list);
+    refreshRowFavIcons();
+    showToast(`已取消收藏《${track.song_name}》${removedFrom ? '（' + removedFrom + '）' : ''}`);
+  } else {
+    const clean = cleanTrackForStorage(track);
+    if (!clean) return;
+    const { playlist, created } = getOrCreateDefaultFavPlaylist(list);
+    playlist.tracks.unshift(clean);
+    saveMyPlaylists(list);
+    refreshRowFavIcons();
+    showToast(created
+      ? `已自动创建《${playlist.name}》并收藏《${track.song_name}》`
+      : `已收藏《${track.song_name}》到《${playlist.name}》`);
+  }
+
+  if (!myPlaylistsModal.classList.contains('hidden')) {
+    try { renderMyPlaylistsCards(); } catch (e) { console.error(e); }
+  }
+}
+
+function playlistHasTrack(pl, track) {
+  const key = trackFavKey(track);
+  if (!key) return false;
+  return (pl.tracks || []).some(t => trackFavKey(t) === key);
+}
+
+function renderFavPlaylistList() {
+  if (!favPlaylistList) return;
+  const playlists = getMyPlaylists();
+  favPlaylistList.innerHTML = '';
+
+  if (playlists.length === 0) {
+    favPlaylistList.innerHTML = `
+      <div class="py-6 px-4 text-center text-xs text-slate-400 border border-dashed border-emerald-200/80 rounded-xl">
+        还没有任何歌单，先在下方新建一个吧
+      </div>
+    `;
+    return;
+  }
+
+  playlists.forEach(pl => {
+    const already = playlistHasTrack(pl, favCandidateTrack);
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = `w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl border text-left transition ${
+      already
+        ? 'border-emerald-300 bg-emerald-50/70 hover:bg-emerald-50'
+        : 'border-slate-200 bg-white hover:border-emerald-300 hover:bg-emerald-50/60'
+    }`;
+    const trackCount = (pl.tracks || []).length;
+    row.innerHTML = `
+      <div class="min-w-0">
+        <div class="text-xs sm:text-sm font-semibold text-slate-800 truncate">${escapeHtml(pl.name)}</div>
+        <div class="text-[11px] text-slate-500 truncate">${trackCount} 首 · ${escapeHtml(pl.source_label || pl.source || '在线歌单')}</div>
+      </div>
+      <span class="shrink-0 text-[11px] font-medium ${already ? 'text-emerald-700' : 'text-slate-400'}">${already ? '已收藏 ✓' : '收藏'}</span>
+    `;
+    row.onclick = () => toggleFavInPlaylist(pl.id, already);
+    favPlaylistList.appendChild(row);
+  });
+}
+
+function showFavNewForm() {
+  if (!favNewForm) return;
+  favNewForm.classList.remove('hidden');
+  favNewForm.classList.add('flex');
+  favNewBtn.classList.add('hidden');
+  favNewNameInput.value = '';
+  favNewNameInput.focus();
+}
+
+function hideFavNewForm() {
+  if (!favNewForm) return;
+  favNewForm.classList.add('hidden');
+  favNewForm.classList.remove('flex');
+  favNewBtn.classList.remove('hidden');
+}
+
+function openFavModal(track) {
+  if (!favModal || !track) return;
+  favCandidateTrack = track;
+  favTrackTitle.innerText = `${track.song_name} - ${track.singers}`;
+  favTrackTitle.title = favTrackTitle.innerText;
+  refreshRowFavIcons();
+  hideFavNewForm();
+  renderFavPlaylistList();
+  favModal.classList.remove('hidden');
+
+  // 一个歌单都没有：直接展开新建表单，省一次点击
+  if (getMyPlaylists().length === 0) showFavNewForm();
+}
+
+function closeFavModal() {
+  if (!favModal) return;
+  favModal.classList.add('hidden');
+  hideFavNewForm();
+  favCandidateTrack = null;
+}
+
+function toggleFavInPlaylist(playlistId, alreadyFaved) {
+  const track = favCandidateTrack;
+  if (!track) return;
+
+  const list = getMyPlaylists();
+  const target = list.find(p => p.id === playlistId);
+  if (!target) return;
+  target.tracks = Array.isArray(target.tracks) ? target.tracks : [];
+
+  const key = trackFavKey(track);
+  if (alreadyFaved) {
+    target.tracks = target.tracks.filter(t => trackFavKey(t) !== key);
+    saveMyPlaylists(list);
+    showToast(`已从《${target.name}》中移除`);
+  } else {
+    const clean = cleanTrackForStorage(track);
+    if (!clean) return;
+    target.tracks.unshift(clean);
+    saveMyPlaylists(list);
+    showToast(`已收藏到《${target.name}》`);
+  }
+
+  refreshRowFavIcons();
+  renderFavPlaylistList();
+  if (!myPlaylistsModal.classList.contains('hidden')) {
+    try { renderMyPlaylistsCards(); } catch (e) { console.error(e); }
+  }
+}
+
+function createPlaylistAndFav() {
+  const name = favNewNameInput.value.trim();
+  if (!name) {
+    showToast('请输入歌单名称');
+    favNewNameInput.focus();
+    return;
+  }
+
+  const list = getMyPlaylists();
+  if (list.some(p => String(p.name).trim() === name)) {
+    showToast(`已存在同名歌单《${name}》，直接在上面选择它即可`);
+    return;
+  }
+
+  const newPl = {
+    id: 'pl_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+    name: name,
+    hasCustomName: true,
+    source: '本地歌单',
+    source_label: '本地歌单',
+    url: '',
+    createTime: new Date().toLocaleDateString(),
+    status: 'ready',
+    tracks: [],
+    errorMsg: ''
+  };
+
+  const clean = cleanTrackForStorage(favCandidateTrack);
+  if (clean) newPl.tracks.push(clean);
+
+  list.unshift(newPl);
+  saveMyPlaylists(list);
+  showToast(`已新建《${name}》并收藏 1 首`);
+
+  refreshRowFavIcons();
+  hideFavNewForm();
+  renderFavPlaylistList();
+  if (!myPlaylistsModal.classList.contains('hidden')) {
+    try { renderMyPlaylistsCards(); } catch (e) { console.error(e); }
+  }
+}
+
+if (favModal) {
+  closeFavModalBtn.onclick = closeFavModal;
+  favModal.addEventListener('click', (e) => {
+    if (e.target === favModal) closeFavModal();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !favModal.classList.contains('hidden')) closeFavModal();
+  });
+  favNewBtn.onclick = showFavNewForm;
+  favNewCancelBtn.onclick = hideFavNewForm;
+  favNewConfirmBtn.onclick = createPlaylistAndFav;
+  favNewNameInput.onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      createPlaylistAndFav();
+    }
+  };
 }
 
 // 全局解析任务防关闭守卫 (动态唤起强提醒与浏览器关闭拦截)
@@ -2232,6 +2625,23 @@ function closePlaylistsModal() {
 myPlaylistsBtn.onclick = openPlaylistsModal;
 closePlaylistsModalBtn.onclick = closePlaylistsModal;
 
+// 空态里的「点顶部我的歌单导入」提示：点击直达歌单面板，并聚焦到粘贴导入框
+const emptyStateImportBtn = document.getElementById('emptyStateImportBtn');
+if (emptyStateImportBtn) {
+  emptyStateImportBtn.addEventListener('click', () => {
+    openPlaylistsModal();
+    if (modalPlaylistUrlInput) {
+      setTimeout(() => {
+        try {
+          modalPlaylistUrlInput.focus({ preventScroll: true });
+        } catch (e) {
+          modalPlaylistUrlInput.focus();
+        }
+      }, 120);
+    }
+  });
+}
+
 function detectSourceMeta(url) {
   if (url.includes('163.com')) return '网易云音乐';
   if (url.includes('qq.com')) return 'QQ音乐';
@@ -2246,6 +2656,7 @@ function detectSourceMeta(url) {
 
 function renderMyPlaylistsCards() {
   const playlists = getMyPlaylists();
+  refreshRowFavIcons();
   updateMyPlaylistsBadge();
   updateParsingGuard();
   myPlaylistsCardsContainer.innerHTML = '';
