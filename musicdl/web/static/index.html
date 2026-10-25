@@ -27,7 +27,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="/static/style.css?v=20261025_17">
+  <link rel="stylesheet" href="/static/style.css?v=20261025_19">
 </head>
 <body class="bg-gradient-to-br from-[#f8fafc] via-[#f0fdf4]/50 to-[#f0fdfa]/70 text-slate-800 min-h-screen flex flex-col font-sans selection:bg-emerald-500 selection:text-white pb-28">
 
@@ -48,11 +48,11 @@
           <span id="brandLogoText" class="hidden min-[360px]:inline font-bold text-base sm:text-lg tracking-tight bg-gradient-to-r from-slate-900 via-emerald-950 to-teal-800 bg-clip-text text-transparent whitespace-nowrap">SoundFlow</span>
         </button>
         <!-- 日间 / 夜间主题切换 (紧随品牌名) -->
-        <button id="themeToggleBtn" class="flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 bg-white border border-slate-200/90 rounded-xl text-slate-500 hover:text-emerald-600 hover:border-emerald-300 shadow-sm transition shrink-0 select-none" title="切换夜间模式" aria-label="切换夜间模式">
-          <svg id="themeMoonIcon" class="w-4 h-4 sm:w-[18px] sm:h-[18px]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <button id="themeToggleBtn" class="flex items-center justify-center w-8 h-8 bg-white border border-slate-200/90 rounded-lg text-slate-500 hover:text-emerald-600 hover:border-emerald-300 shadow-sm transition shrink-0 select-none" title="切换夜间模式" aria-label="切换夜间模式">
+          <svg id="themeMoonIcon" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
           </svg>
-          <svg id="themeSunIcon" class="hidden w-4 h-4 sm:w-[18px] sm:h-[18px]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <svg id="themeSunIcon" class="hidden w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
           </svg>
         </button>
@@ -60,19 +60,17 @@
 
       <!-- 右侧控制区 (手机端与桌面端均同一行右对齐，绝不折行) -->
       <div class="flex items-center gap-2 sm:gap-3 shrink-0 ml-auto">
-        <!-- 歌单 (独立按钮，精简文案为“歌单”) -->
-        <div class="flex items-center bg-slate-100/90 p-0.5 sm:p-1 rounded-xl border border-slate-200/80 text-xs sm:text-sm shadow-inner">
-          <button id="myPlaylistsBtn" class="flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-lg font-medium transition-all bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/25 select-none whitespace-nowrap" title="打开我的歌单与本地管理中心">
-            <svg class="hidden min-[380px]:inline w-3.5 h-3.5 sm:w-4 sm:h-4 text-white shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+        <!-- 歌单 (独立按钮，精简文案为“歌单”，与主题/格式同为 32px 高、8px 圆角) -->
+        <button id="myPlaylistsBtn" class="flex items-center gap-1.5 px-2.5 sm:px-3.5 h-8 rounded-lg text-xs sm:text-sm font-medium transition-all bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/25 select-none whitespace-nowrap" title="打开我的歌单与本地管理中心">
+          <svg class="hidden min-[380px]:inline w-3.5 h-3.5 sm:w-4 sm:h-4 text-white shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
           </svg>
-            <span class="whitespace-nowrap font-medium text-xs sm:text-sm">我的歌单</span>
-            <span id="myPlaylistsCountBadge" class="hidden text-[10px] sm:text-xs px-1.5 py-0.2 rounded-full bg-white/25 text-white font-mono font-bold shadow-sm">0</span>
+          <span class="whitespace-nowrap font-medium text-xs sm:text-sm">我的歌单</span>
+          <span id="myPlaylistsCountBadge" class="hidden text-[10px] sm:text-xs px-1.5 py-0.5 rounded-full bg-white/25 text-white font-mono font-bold shadow-sm">0</span>
         </button>
-        </div>
 
         <!-- 下载格式 (固定显示“格式”，绝不展示具体冗长格式名，彻底杜绝换行) -->
-        <div id="formatPrefBadge" class="flex items-center gap-1.5 text-xs sm:text-sm bg-white border border-slate-200/90 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl cursor-pointer hover:border-emerald-300 shadow-sm transition shrink-0 select-none" title="设置下载格式与歌词偏好">
+        <div id="formatPrefBadge" class="flex items-center gap-1.5 h-8 text-xs sm:text-sm bg-white border border-slate-200/90 px-2.5 sm:px-3 rounded-lg cursor-pointer hover:border-emerald-300 shadow-sm transition shrink-0 select-none" title="设置下载格式与歌词偏好">
           <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
           </svg>
@@ -917,6 +915,6 @@
   <audio id="audioElement" preload="none"></audio>
   <script src="/static/libs/qrcode.min.js"></script>
   <script src="/static/libs/jsQR.min.js"></script>
-  <script src="/static/app.js?v=20261025_17"></script>
+  <script src="/static/app.js?v=20261025_19"></script>
 </body>
 </html>
