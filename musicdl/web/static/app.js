@@ -1053,9 +1053,11 @@ function openFullscreenPlayer() {
     fullscreenPlayer.classList.add('player-open');
   });
   state.isFullscreenOpen = true;
-  if (audioElement && audioElement.currentTime) {
-    syncLyric(audioElement.currentTime);
-  }
+  // 关键修复：隐藏期间全屏歌词容器没有布局高度，此前的同步全部无效（scrollTop 恒为 0）
+  // 因此打开后必须无视「当前行未变化」再强制定位一次，否则歌词会停在顶部直到下一行才突然跳过去
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => syncLyric(audioElement.currentTime || 0, { force: true }));
+  });
 }
 
 function closeFullscreenPlayer() {
@@ -1853,6 +1855,9 @@ async function loadLyric(token) {
   state.currentLyricIndex = -1;
 
   const track = state.currentTrack;
+  // 竞态防护：连续切歌时，旧曲目的歌词请求可能后到，
+  // 若无条件写入 state.lyrics / renderLyric，就会出现「新歌配旧歌词」——歌词行时间轴对不上，看起来就是卡住不滚
+  const isStale = () => !state.currentTrack || state.currentTrack.token !== token;
 
   // 1. 若当前曲目已带有歌词缓存，优先秒级预渲染
   if (track && track.lyric) {
@@ -1878,6 +1883,7 @@ async function loadLyric(token) {
 
     const res = await fetch(url);
     const data = await res.json();
+    if (isStale()) return;
     if (data && data.lyric) {
       if (state.currentTrack) {
         state.currentTrack.lyric = data.lyric;
@@ -1893,8 +1899,10 @@ async function loadLyric(token) {
     if (track && track.identifier && /^\d+$/.test(track.identifier)) {
       try {
         const clientRes = await fetch(`https://api.injahow.cn/meting/?type=lrc&id=${track.identifier}`);
+        if (isStale()) return;
         if (clientRes.ok) {
           const clientLrc = await clientRes.text();
+          if (isStale()) return;
           if (clientLrc && clientLrc.length > 20 && clientLrc.includes('[')) {
             if (state.currentTrack) {
               state.currentTrack.lyric = clientLrc;
@@ -1911,7 +1919,7 @@ async function loadLyric(token) {
       }
     }
 
-    if (!state.lyrics.length) {
+    if (!isStale() && !state.lyrics.length) {
       if (state.currentTrack && state.currentTrack.token === token) {
         state.currentTrack.has_lyric = false;
       }
@@ -1925,8 +1933,10 @@ async function loadLyric(token) {
     if (track && track.identifier && /^\d+$/.test(track.identifier)) {
       try {
         const clientRes = await fetch(`https://api.injahow.cn/meting/?type=lrc&id=${track.identifier}`);
+        if (isStale()) return;
         if (clientRes.ok) {
           const clientLrc = await clientRes.text();
+          if (isStale()) return;
           if (clientLrc && clientLrc.length > 20 && clientLrc.includes('[')) {
             if (state.currentTrack) {
               state.currentTrack.lyric = clientLrc;
@@ -1942,7 +1952,7 @@ async function loadLyric(token) {
         // ignore
       }
     }
-    if (!state.lyrics.length) {
+    if (!isStale() && !state.lyrics.length) {
       if (state.currentTrack && state.currentTrack.token === token) {
         state.currentTrack.has_lyric = false;
       }
@@ -2042,8 +2052,52 @@ function renderLyric() {
   });
 }
 
-function syncLyric(currentTime) {
+// 歌词行居中滚动：rAF 缓动 + 每帧按实时几何重算
+// 这样做的好处：
+// 1) 不依赖 offsetTop/offsetParent（歌词行就近定位的祖先不一定是滚动容器，offsetTop 会带系统偏差）
+// 2) 连续快节奏换行时不会像 scrollTo({behavior:'smooth'}) 那样动画被打断、永远追不上
+// 3) 字体切换行高、窗口缩放、全屏入场位移等布局抖动都会在下一帧被自动吸收
+const lyricScrollRafs = new WeakMap();
+
+function centerLyricLine(container, lineEl) {
+  if (!container || !lineEl) return;
+  const prevRaf = lyricScrollRafs.get(container);
+  if (prevRaf) cancelAnimationFrame(prevRaf);
+
+  const startedAt = performance.now();
+  let waitFrames = 0;
+  const step = () => {
+    // 容器此刻还没有布局高度（全屏刚展开 / 抽屉刚插入 / 标签页被浏览器节流）时
+    // 不能直接放弃——等下一帧再试，最长等约 1.2 秒，避免布局竞态导致「永久停在顶部」
+    if (!container.clientHeight) {
+      if (++waitFrames > 90 || performance.now() - startedAt > 1200) {
+        lyricScrollRafs.delete(container);
+        return;
+      }
+      lyricScrollRafs.set(container, requestAnimationFrame(step));
+      return;
+    }
+    const cRect = container.getBoundingClientRect();
+    const lRect = lineEl.getBoundingClientRect();
+    // 目标：让该行中心落在容器垂直中心
+    const delta = (lRect.top + lRect.height / 2) - (cRect.top + cRect.height / 2);
+    const elapsed = performance.now() - startedAt;
+
+    if (Math.abs(delta) <= 0.5 || elapsed > 900) {
+      container.scrollTop += delta; // 收尾精确对齐（首尾行会被浏览器夹紧，无副作用）
+      lyricScrollRafs.delete(container);
+      return;
+    }
+    container.scrollTop += delta * 0.3;
+    lyricScrollRafs.set(container, requestAnimationFrame(step));
+  };
+  lyricScrollRafs.set(container, requestAnimationFrame(step));
+}
+
+function syncLyric(currentTime, options) {
   if (state.lyrics.length === 0) return;
+  const force = Boolean(options && options.force);
+
   let idx = 0;
   for (let i = 0; i < state.lyrics.length; i++) {
     if (currentTime >= state.lyrics[i].time) {
@@ -2053,46 +2107,49 @@ function syncLyric(currentTime) {
     }
   }
 
-  if (idx !== state.currentLyricIndex) {
-    state.currentLyricIndex = idx;
-    
-    // 1. 侧边栏小抽屉歌词同步
-    document.querySelectorAll('.lyric-line').forEach(el => el.classList.remove('active'));
-    const target = document.querySelector(`.lyric-line[data-index="${idx}"]`);
-    if (target && lyricContainer) {
-      target.classList.add('active');
-      const containerH = lyricContainer.clientHeight;
-      const targetTop = target.offsetTop;
-      const targetH = target.clientHeight;
-      lyricContainer.scrollTo({
-        top: Math.max(0, targetTop - (containerH / 2) + (targetH / 2)),
-        behavior: 'smooth'
-      });
-    }
+  // 同一行默认不重复处理；force 用于「容器刚刚获得布局」的场景（打开全屏 / 展开抽屉 / 窗口缩放）
+  if (idx === state.currentLyricIndex && !force) return;
+  state.currentLyricIndex = idx;
 
-    // 2. 全屏大播放器歌词同步高亮与居中滚动 (容器级精准滚动，绝不连带滚动外层页面)
-    document.querySelectorAll('.fs-lyric-line').forEach(el => el.classList.remove('fs-lyric-active'));
-    const fsTarget = document.querySelector(`.fs-lyric-line[data-fs-index="${idx}"]`);
-    if (fsTarget && fsLyricContainer) {
-      fsTarget.classList.add('fs-lyric-active');
-      const containerH = fsLyricContainer.clientHeight;
-      const targetTop = fsTarget.offsetTop;
-      const targetH = fsTarget.clientHeight;
-      fsLyricContainer.scrollTo({
-        top: Math.max(0, targetTop - (containerH / 2) + (targetH / 2)),
-        behavior: 'smooth'
-      });
-    }
+  // 1. 侧边栏小抽屉歌词同步
+  document.querySelectorAll('.lyric-line').forEach(el => el.classList.remove('active'));
+  const target = document.querySelector(`.lyric-line[data-index="${idx}"]`);
+  if (target) {
+    target.classList.add('active');
+    centerLyricLine(lyricContainer, target);
+  }
+
+  // 2. 全屏大播放器歌词同步高亮与居中滚动（容器级滚动，不牵连外层页面）
+  document.querySelectorAll('.fs-lyric-line').forEach(el => el.classList.remove('fs-lyric-active'));
+  const fsTarget = document.querySelector(`.fs-lyric-line[data-fs-index="${idx}"]`);
+  if (fsTarget) {
+    fsTarget.classList.add('fs-lyric-active');
+    centerLyricLine(fsLyricContainer, fsTarget);
   }
 }
 
 // 侧边栏抽屉歌词按钮保留支持
 if (footerLyricBtn) {
-  footerLyricBtn.onclick = () => lyricModal.classList.toggle('translate-x-full');
+  footerLyricBtn.onclick = () => {
+    lyricModal.classList.toggle('translate-x-full');
+    // 抽屉刚展开时同样要强制补一次居中定位
+    if (!lyricModal.classList.contains('translate-x-full')) {
+      requestAnimationFrame(() => syncLyric(audioElement.currentTime || 0, { force: true }));
+    }
+  };
 }
 if (closeLyricBtn) {
   closeLyricBtn.onclick = () => lyricModal.classList.add('translate-x-full');
 }
+
+// 窗口缩放 / 手机横竖屏切换后，词行宽度变化会让居中位置偏移，需要重新对齐
+let lyricRelayoutTimer = 0;
+window.addEventListener('resize', () => {
+  clearTimeout(lyricRelayoutTimer);
+  lyricRelayoutTimer = setTimeout(() => {
+    syncLyric(audioElement.currentTime || 0, { force: true });
+  }, 180);
+});
 
 
 // 7. Playlist Parsing
