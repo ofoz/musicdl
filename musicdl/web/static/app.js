@@ -1689,8 +1689,16 @@ audioElement.onerror = () => {
 
 // 只有「确实在前进」的事件才刷新看门狗基准；
 // waiting/stalled 表示正在缓冲（即没有前进），绝不能刷新基准，否则永远探测不到卡死
-audioElement.onplaying = () => { markProgress(); };
-audioElement.onseeked = () => { markProgress(); };
+audioElement.onplaying = () => {
+  markProgress();
+  // 缓冲结束恢复出声时补一次对齐，避免暂停/缓冲期间歌词停在旧行
+  syncLyric(audioElement.currentTime || 0, { force: true });
+};
+audioElement.onseeked = () => {
+  markProgress();
+  // 拖动进度条后立即归位：暂停状态下浏览器不保证补发 timeupdate
+  syncLyric(audioElement.currentTime || 0, { force: true });
+};
 
 audioElement.onplay = () => {
   updatePlayPauseIcon(true);
@@ -1706,6 +1714,9 @@ audioElement.onplay = () => {
 audioElement.onpause = () => {
   updatePlayPauseIcon(false);
   refreshTitle();
+  // 暂停后不会再触发 timeupdate，这里必须补一次，
+  // 否则「暂停状态下歌词才加载出来」会一直没有任何高亮
+  syncLyric(audioElement.currentTime || 0, { force: true });
 };
 
 audioElement.onended = () => {
@@ -1714,8 +1725,11 @@ audioElement.onended = () => {
 
 audioElement.ontimeupdate = () => {
   markProgress();
-  if (!audioElement.duration) return;
   const current = audioElement.currentTime;
+  // 歌词同步必须在 duration 判断之前：部分流式源拿不到时长（duration 为 NaN），
+  // 若跟着进度条逻辑一起 return，歌词就会彻底不动
+  syncLyric(current);
+  if (!audioElement.duration) return;
   const duration = audioElement.duration;
   const percent = (current / duration) * 100;
   
@@ -1731,8 +1745,6 @@ audioElement.ontimeupdate = () => {
   fsCurrentTime.innerText = currentFormatted;
   durationText.innerText = durationFormatted;
   fsDuration.innerText = durationFormatted;
-
-  syncLyric(current);
 };
 
 // 滑杆填充：把百分比写进 CSS 变量 --pct，供 .sf-range 的渐变轨道上色
@@ -2050,6 +2062,11 @@ function renderLyric() {
     };
     fsLyricContainer.appendChild(fsP);
   });
+
+  // 渲染完成立刻按当前播放位置对齐一次：
+  // 歌词可能是播放到一半才到达的，也可能到达时正处于暂停（没有 timeupdate 驱动），
+  // 不主动补这一次就会出现「歌词渲染出来了但没有任何行高亮、列表停在顶部」
+  syncLyric(audioElement.currentTime || 0, { force: true });
 }
 
 // 歌词行居中滚动：rAF 缓动 + 每帧按实时几何重算
@@ -2096,6 +2113,10 @@ function centerLyricLine(container, lineEl) {
 
 function syncLyric(currentTime, options) {
   if (state.lyrics.length === 0) return;
+  // 兜底：currentTime 可能因为流未就绪而是 NaN/Infinity，直接用会让 idx 永远停在 0
+  const t = Number.isFinite(currentTime) ? currentTime : (audioElement ? audioElement.currentTime : 0);
+  if (!Number.isFinite(t)) return;
+  currentTime = t;
   const force = Boolean(options && options.force);
 
   let idx = 0;
