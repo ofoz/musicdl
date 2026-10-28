@@ -153,19 +153,14 @@ th.whitespace-nowrap, td.whitespace-nowrap {
   transform: rotate(-25deg) !important;
 }
 
-/* 歌词框四周柔和颜色渐变与无死角自然消融 */
+/* 歌词区域不再使用玻璃卡片：去掉底色、阴影、圆角与毛玻璃，让歌词直接浮在播放器背景上，
+   只保留下方的高度约束（用于「恰好露出 5~6 行」的聚焦效果） */
 .fs-lyric-box {
-  background: radial-gradient(
-    ellipse 85% 75% at 50% 50%,
-    rgba(255, 255, 255, 0.72) 0%,
-    rgba(255, 255, 255, 0.4) 48%,
-    rgba(240, 253, 244, 0.18) 75%,
-    transparent 100%
-  );
-  box-shadow: 0 10px 40px -10px rgba(16, 185, 129, 0.08);
-  border-radius: 2.5rem;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: none;
+  box-shadow: none;
+  border-radius: 0;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 /* PC 桌面端大播放器歌词容器精准控制在 5-6 行可视高度，极简聚焦与呼吸感 */
@@ -231,8 +226,10 @@ th.whitespace-nowrap, td.whitespace-nowrap {
   color: #10b981;
 }
 
-/* 正在播放行：纯粹变色高亮，无胶囊边框无背景，字字清晰 */
-.fs-lyric-active {
+/* 正在播放行：纯粹变色高亮，无胶囊边框无背景，字字清晰。
+   必须限定在平面模式：这些 !important 会连 3D 散布场的 inline 位移和字号一起压掉
+   （transform: none !important 曾让「高亮行浮到中心」完全失效，查了很久）。 */
+html:not(.fs3d) .fs-lyric-active {
   font-size: 0.9375rem !important;
   font-weight: 700 !important;
   color: #059669 !important;
@@ -245,7 +242,7 @@ th.whitespace-nowrap, td.whitespace-nowrap {
 }
 
 @media (min-width: 640px) {
-  .fs-lyric-active {
+  html:not(.fs3d) .fs-lyric-active {
     font-size: 1.15rem !important;
     padding: 5px 12px !important;
   }
@@ -262,12 +259,20 @@ th.whitespace-nowrap, td.whitespace-nowrap {
   transition: background 0.2s ease;
 }
 
-.fs-lyric-box:hover .fs-lyric-scroll::-webkit-scrollbar-thumb {
-  background: rgba(16, 185, 129, 0.38);
-}
-
 .fs-lyric-scroll::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* 全屏歌词容器不显示滚动条：滚动完全由脚本驱动，右侧留一条竖线看起来就像多画了一道边框
+   （只针对 #fsLyricContainer，另一个共用 .fs-lyric-scroll 的歌单列表滚动条保持原样） */
+#fsLyricContainer {
+  scrollbar-width: none;
+}
+
+#fsLyricContainer::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 /* 8. 歌单卡片与动效 */
@@ -346,11 +351,12 @@ html.dark #fullscreenPlayer {
 }
 
 html.dark #fsBgVeil {
+  /* 中间那档原来是偏绿的 rgba(28,38,34)，整屏会透出一层绿灰；改成冷蓝灰 */
   background: linear-gradient(
     to bottom,
-    rgba(31, 38, 47, 0.9) 0%,
-    rgba(28, 38, 34, 0.86) 52%,
-    rgba(27, 33, 41, 0.95) 100%
+    rgba(28, 35, 48, 0.9) 0%,
+    rgba(23, 29, 44, 0.86) 52%,
+    rgba(20, 25, 36, 0.95) 100%
   );
 }
 
@@ -579,17 +585,7 @@ html.dark .playlist-track-item:hover {
   background-color: rgba(16, 185, 129, 0.07);
 }
 
-/* 歌词玻璃盒：夜间改为深色弥散 */
-html.dark .fs-lyric-box {
-  background: radial-gradient(
-    ellipse 85% 75% at 50% 50%,
-    rgba(38, 46, 56, 0.82) 0%,
-    rgba(32, 40, 48, 0.55) 48%,
-    rgba(16, 185, 129, 0.06) 75%,
-    transparent 100%
-  );
-  box-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.4);
-}
+/* 歌词玻璃盒已取消，夜间同样不再画任何底色 */
 
 html.dark .fs-lyric-line {
   color: #7d8b9a;
@@ -768,4 +764,649 @@ html.dark #volumePanel {
 
 .vol-v input[type="range"]::-moz-range-thumb {
   opacity: 1;
+}
+
+/* ============================================================
+   13. 全屏播放器 v2：日间「封面卡」 / 夜间「歌词剧场」
+   背景主色由 app.js 从封面抽色写入 --fs-ambient / --fs-ambient-deep
+   ============================================================ */
+
+/* ---------- 背景主色（跟随封面，替代固定的 #f8fafc） ---------- */
+#fullscreenPlayer {
+  background-color: var(--fs-ambient, #f3f7f5) !important;
+  transition: background-color 0.8s ease;
+}
+
+html.dark #fullscreenPlayer {
+  background-color: var(--fs-ambient-deep, #0a0f13) !important;
+}
+
+/* 封面光晕：日间压得很淡，只留一层空气感 */
+#fsBgBlur {
+  opacity: 0.2;
+  filter: blur(72px) saturate(1.2);
+}
+
+html.dark #fsBgBlur {
+  opacity: 0.2;
+  filter: blur(80px) saturate(1.35);
+}
+
+/* 纱幕：日间不盖色，夜间压暗四周把歌词托起来 */
+#fsBgVeil {
+  background: radial-gradient(
+    120% 85% at 50% 0%,
+    rgba(255, 255, 255, 0.55) 0%,
+    rgba(255, 255, 255, 0) 58%
+  );
+}
+
+html.dark #fsBgVeil {
+  background:
+    radial-gradient(90% 65% at 50% 6%, rgba(16, 185, 129, 0.07) 0%, rgba(16, 185, 129, 0) 60%),
+    linear-gradient(
+      to bottom,
+      rgba(4, 8, 11, 0.6) 0%,
+      rgba(4, 8, 11, 0.38) 45%,
+      rgba(4, 8, 11, 0.86) 100%
+    );
+}
+
+/* ---------- 日间：黑胶圆盘 → 方形封面卡 ---------- */
+#vinylDisc {
+  border: 0;
+  border-radius: 24px;
+  background: #ffffff;
+  overflow: hidden;
+  box-shadow: 0 22px 48px -20px rgba(6, 46, 38, 0.45), 0 0 0 1px rgba(15, 23, 42, 0.06);
+}
+
+#vinylDisc .vinyl-grooves,
+#vinylDisc #vinylHole,
+#vinylNeedle {
+  display: none;
+}
+
+#vinylDisc #fsCoverImg {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  object-fit: cover;
+  background: #eef2f5;
+}
+
+/* 方形封面不旋转：播放中改用极缓的翡翠绿呼吸光晕表示「正在走」 */
+#vinylDisc.spin-playing {
+  animation: coverBreath 3.6s ease-in-out infinite;
+}
+
+#vinylDisc.spin-paused {
+  animation: none;
+}
+
+@keyframes coverBreath {
+  0%,
+  100% {
+    box-shadow: 0 22px 48px -20px rgba(6, 46, 38, 0.45), 0 0 0 1px rgba(15, 23, 42, 0.06),
+      0 0 0 0 rgba(16, 185, 129, 0);
+  }
+  50% {
+    box-shadow: 0 26px 54px -18px rgba(6, 46, 38, 0.5), 0 0 0 1px rgba(15, 23, 42, 0.06),
+      0 0 34px 0 rgba(16, 185, 129, 0.3);
+  }
+}
+
+/* ---------- 夜间：剧场 —— 封面让位，歌词独占 ---------- */
+html.dark #fsCoverPane {
+  display: none !important;
+}
+
+html.dark #fsLyricPane {
+  grid-column: 1 / -1;
+  width: 100%;
+  max-width: 880px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+@media (min-width: 1024px) {
+  html.dark #fsLyricPane.fs-lyric-box {
+    height: clamp(340px, 56vh, 560px) !important;
+    max-height: none !important;
+    min-height: 0 !important;
+  }
+}
+
+html.dark #fsLyricContainer {
+  text-align: center !important;
+  padding-left: 1.5rem !important;
+  padding-right: 1.5rem !important;
+}
+
+@media (min-width: 640px) {
+  html.dark #fsLyricContainer > * + * {
+    margin-top: 1.05rem;
+  }
+}
+
+/* 顶栏 / 底栏：玻璃压到最暗，不抢歌词 */
+html.dark #fullscreenPlayer header {
+  background: rgba(9, 14, 18, 0.42) !important;
+  border-bottom-color: rgba(255, 255, 255, 0.06) !important;
+  backdrop-filter: blur(18px) saturate(1.15);
+  -webkit-backdrop-filter: blur(18px) saturate(1.15);
+}
+
+html.dark #fullscreenPlayer footer {
+  background: rgba(9, 14, 18, 0.58) !important;
+  border-top-color: rgba(255, 255, 255, 0.06) !important;
+  box-shadow: none !important;
+  backdrop-filter: blur(20px) saturate(1.15);
+  -webkit-backdrop-filter: blur(20px) saturate(1.15);
+}
+
+html.dark #fullscreenPlayer header button {
+  background: rgba(255, 255, 255, 0.08) !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  color: #dbe4ec !important;
+  box-shadow: none !important;
+}
+
+html.dark #fullscreenPlayer header button:hover {
+  background: rgba(16, 185, 129, 0.16) !important;
+  border-color: rgba(16, 185, 129, 0.32) !important;
+  color: #6ee7b7 !important;
+}
+
+/* 控制区闲置淡出（仅夜间）：画面只留歌词，鼠标一动立刻回来 */
+html.dark #fullscreenPlayer header,
+html.dark #fullscreenPlayer footer {
+  transition: opacity 0.55s ease, background-color 0.3s ease;
+}
+
+html.dark #fullscreenPlayer.fs-idle header,
+html.dark #fullscreenPlayer.fs-idle footer {
+  opacity: 0.1;
+}
+
+/* ---------- 歌词三档字号：当前行 / 邻行 / 其余 ---------- */
+/* display:block 是关键：原来的 inline-block 会让几条短句并排挤在同一行 */
+.fs-lyric-line {
+  display: block;
+  max-width: none;
+  font-size: 0.85rem;
+  line-height: 1.7;
+  color: #5b6a7a;
+  opacity: 0.74;
+  transition: color 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s ease;
+}
+
+@media (min-width: 640px) {
+  .fs-lyric-line {
+    font-size: 0.9rem;
+    line-height: 1.85;
+  }
+}
+
+.fs-lyric-line.fs-lyric-adj {
+  font-size: 0.95rem;
+  color: #3f4e5e;
+  opacity: 0.92;
+}
+
+@media (min-width: 640px) {
+  .fs-lyric-line.fs-lyric-adj {
+    font-size: 1.02rem;
+  }
+}
+
+.fs-lyric-line.fs-lyric-active {
+  font-size: 1.1rem !important;
+  line-height: 1.6;
+  opacity: 1;
+}
+
+@media (min-width: 640px) {
+  .fs-lyric-line.fs-lyric-active {
+    font-size: 1.4rem !important;
+    line-height: 1.5;
+  }
+}
+
+/* 夜间：词色更淡更冷，当前行提到近白 + 一层中性柔光
+   整体比早先压暗一档（#93a2b3 -> #7c8b9b）：夜里这首歌的歌词是背景，不该抢眼 */
+html.dark .fs-lyric-line {
+  color: #7c8b9b;
+  opacity: 0.55;
+  font-size: 0.95rem;
+}
+
+@media (min-width: 640px) {
+  html.dark .fs-lyric-line {
+    font-size: 1rem;
+  }
+}
+
+html.dark .fs-lyric-line.fs-lyric-adj {
+  color: #94a2b0;
+  opacity: 0.78;
+  font-size: 1.06rem;
+}
+
+html.dark .fs-lyric-line.fs-lyric-active {
+  color: #dfe7ef !important;
+  text-shadow: 0 0 34px rgba(226, 236, 245, 0.18);
+  font-size: 1.16rem !important;
+}
+
+@media (min-width: 640px) {
+  html.dark .fs-lyric-line.fs-lyric-active {
+    font-size: 1.55rem !important;
+  }
+}
+
+/* ---------- 进度条悬停气泡：显示落点剩余时间 ---------- */
+.fs-seek-bubble {
+  position: absolute;
+  bottom: calc(100% + 11px);
+  left: 0;
+  transform: translateX(-50%);
+  padding: 3px 8px;
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  color: #f8fafc;
+  background: #0f172a;
+  box-shadow: 0 8px 20px -8px rgba(15, 23, 42, 0.65);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.14s ease;
+  z-index: 2;
+}
+
+.fs-seek-bubble.is-visible {
+  opacity: 1;
+}
+
+html.dark .fs-seek-bubble {
+  color: #0b1116;
+  background: #dbe6ef;
+  box-shadow: 0 8px 20px -8px rgba(0, 0, 0, 0.75);
+}
+
+/* ============================================================
+   14. 夜间 3D 歌词剧场（开关：app.js 在 <html> 上挂 .fs3d）
+   歌词不再是滚动列表，而是按「与当前行的距离」摆进一个真透视空间：
+   近大远小全部由 perspective 算出来，不靠 font-size / scale 伪装。
+   顺带好处：滚动容器在 3D 下彻底不滚，历史上一堆滚动竞态自然消失。
+   ============================================================ */
+
+/* ---------- 散布场：每一句都钉在空间里，唱到哪句哪句亮 ---------- */
+/* 位置、角度、远近由 JS 用「行号 + 固定种子」算出来，只在歌词重新渲染或视口变化时算一次。
+   切歌时文字不动，只有亮度和缩放会走 —— 所以看见的是「光在扫过字」，而不是整屏重排。 */
+html.dark.fs3d #fsLyricPane.fs-lyric-box {
+  position: fixed;
+  inset: 0;
+  width: 100vw !important;
+  max-width: none !important;
+  height: 100vh !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden;
+  z-index: 2;
+  /* 已经不靠透视摆位了，位置是直接给定的坐标 */
+  perspective: none;
+  /* 别把顶栏和底部播放条挡死 */
+  pointer-events: none;
+}
+
+html.dark.fs3d #fsLyricContainer {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+  overflow: visible !important;
+  transform: none;
+  mask-image: none;
+  -webkit-mask-image: none;
+  padding: 0 !important;
+}
+
+/* 每行：绝对定位到 (x, y)，再围着自身中心旋转缩放。
+   translate3d 用 --fs-spread-x/y（px，JS 写入），后面两句负责居中与姿态 */
+/* 3D 剧场里歌词区是 position:fixed inset:0，空态文案会正好钻到顶栏底下（窄屏直接压字）。
+   顶栏约 62~75px 高，这里统一留出 96px；普通模式的空态仍按原来的居中留白 */
+html.dark.fs3d #fsLyricEmpty {
+  padding-top: 96px !important;
+}
+
+html.dark.fs3d #fsLyricContainer > .fs-lyric-line {
+  position: absolute;
+  left: 0;
+  top: 0;
+  margin: 0 !important;
+  padding: 0 0.3em !important;
+  text-align: center !important;
+  white-space: nowrap;
+  font-size: 1.1rem;
+  opacity: 0;
+  /* 位置由 JS 直接写 inline transform：custom property 放在 transform 里
+     计算值会退化成 none（实测），inline 最稳 */
+  transform: translate3d(50vw, 50vh, 0) translate(-50%, -50%) scale(1);
+  transform-origin: 50% 50%;
+  transition: transform 0.6s cubic-bezier(0.22, 0.61, 0.36, 1), opacity 0.5s ease,
+    color 0.45s ease, filter 0.45s ease, text-shadow 0.45s ease;
+  pointer-events: auto;
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+}
+
+/* 当前行：回正、提到最上层，两层硬边阴影做出字块厚度。
+   颜色全部中性化（R≈G≈B 的冷白）：之前是 #d6ebe4 + 两层翡翠绿阴影，
+   整句会泛一层绿；夜空既然是纯黑的，字也应该是白的，绿只留给按钮和进度条。
+   厚度用"比字暗一档的灰白"而不是深色/黑色，才不会又变成一圈黑描边。
+   亮度刻意停在 #b6c3d0（约 195 级）而不是近白：关灯看的时候纯白/近白会刺眼，
+   和纯黑背景对比过强也容易发虚；再往上抬就回到「屏幕在发光」的观感了，
+   这一档在纯黑底上依然是最亮的一层，和暗字（约 30~60 级）差着 3 倍以上 */
+html.dark.fs3d #fsLyricContainer > .fs-lyric-line.fs-lyric-active {
+  z-index: 60 !important;
+  color: #b6c3d0 !important;
+  /* 用 em 而不是 px：长句被自动缩字时，厚度会跟着一起缩 */
+  text-shadow: 0 0.05em 0 rgba(156, 168, 184, 0.48), 0 0.1em 0 rgba(104, 116, 132, 0.34),
+    0 0.34em 1em rgba(196, 212, 228, 0.14);
+}
+
+/* 未亮起的散字：满屏铺着，单句再暗也看得见轮廓，整体亮度必须压下去，
+   否则一片灰白的字会把那块黑糊掉，也还是刺眼 */
+html.dark.fs3d #fsLyricContainer > .fs-lyric-line {
+  color: #7e8d9d;
+}
+
+html.dark.fs3d #fsLyricContainer > .fs-lyric-line.fs-lyric-adj {
+  color: #97a5b3;
+}
+
+/* 悬停只是提示「可以点回去」，同样用中性白，别再冒绿色 */
+html.dark.fs3d #fsLyricContainer > .fs-lyric-line:hover {
+  color: #b6c2cf;
+}
+
+/* ---------- 场景：星空 + 流星 ---------- */
+/* 默认全隐：场景只属于夜间 3D，白天（以及未开启 3D 时）必须彻底不可见。
+   一层近黑的夜空 + 星点 + 偶尔划过的流星。不再有任何色块（绿/蓝都不要）：
+   彩色底会和翡翠色歌词互相串色，天空就该是黑的，颜色交给星星 */
+#fsScene {
+  opacity: 0;
+  z-index: 1;
+  transition: opacity 0.7s ease;
+}
+
+html.dark.fs3d #fsScene {
+  opacity: 1;
+}
+
+/* 夜空底色：近黑，中性（R≈G≈B），一点色偏都不要。
+   之前几版在背后铺绿光斑、蓝光斑，字是翡翠色，底也是彩色，两边互相串色；
+   真正的星空本来就是黑的，颜色全部交给星星。
+   #fullscreenPlayer 的底色由封面抽色写入（var(--fs-ambient-deep)）且带 !important，
+   所以这里也必须用 !important 才压得住，否则歌一换封面颜色又跑回来。 */
+html.dark.fs3d #fullscreenPlayer {
+  background-color: #060607 !important;
+}
+
+/* 封面高斯模糊层整屏都是封面的主色，在星空模式下几乎关掉，只留 5% 的呼吸 */
+html.dark.fs3d #fsBgBlur {
+  opacity: 0.05;
+}
+
+/* 面纱层也跟着改成纯黑渐变（非 3D 的夜间模式仍保留原来的冷灰玻璃感） */
+html.dark.fs3d #fsBgVeil {
+  background: linear-gradient(
+    to bottom,
+    rgba(9, 9, 10, 0.9) 0%,
+    rgba(6, 6, 7, 0.86) 52%,
+    rgba(4, 4, 5, 0.95) 100%
+  );
+}
+
+#fsSceneStars {
+  position: absolute;
+  inset: 0;
+}
+
+/* 星层本身是 1~2px 的小圆点，其余上百颗靠 box-shadow 一次性画出来：
+   上百个真节点（每个还要单独跑动画）在低端机上会明显掉帧。
+   每层：闪烁（opacity）+ 缓慢游移（transform）。位移要够大、周期要够短才「看得出在动」——
+   之前 150~230s 走 30px 等于一动不动，现在近层 22s 走 300px。 */
+.fs-star-layer {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  margin: -1px 0 0 -1px;
+  border-radius: 50%;
+  background: rgba(226, 242, 255, 0.95);
+  animation-name: fsStarTwinkle, fsStarDriftFar;
+  animation-timing-function: ease-in-out, ease-in-out;
+  animation-iteration-count: infinite, infinite;
+  animation-direction: alternate, alternate;
+  will-change: transform, opacity;
+}
+
+.fs-star-far {
+  animation-duration: 9s, 42s;
+}
+
+.fs-star-mid {
+  animation-duration: 7s, 30s;
+  animation-name: fsStarTwinkle, fsStarDriftMid;
+}
+
+.fs-star-near {
+  animation-duration: 5.5s, 22s;
+  animation-name: fsStarTwinkle, fsStarDriftNear;
+}
+
+/* 亮星：带光晕、幅度更大的呼吸 */
+.fs-star-bright {
+  position: absolute;
+  inset: 0;
+}
+
+.fs-star-bright s {
+  position: absolute;
+  display: block;
+  border-radius: 50%;
+  background: #f2fbff;
+  /* 光晕也保持中性白：只剩 10 颗亮星，带蓝晕会在黑底上冒出蓝色小点 */
+  box-shadow: 0 0 6px rgba(235, 240, 250, 0.85), 0 0 15px rgba(206, 215, 232, 0.3);
+  animation-name: fsStarBreathe;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  animation-direction: alternate;
+}
+
+/* 闪烁幅度只到 0.72：整层一起脉动，掉太多会像屏幕在闪 */
+@keyframes fsStarTwinkle {
+  from {
+    opacity: 0.72;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fsStarBreathe {
+  from {
+    opacity: 0.45;
+    transform: scale(0.82);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+}
+
+/* 三层位移量不同：近层走得远、远层几乎不动，于是有视差。
+   方向也各自错开一点（远层偏右下、近层偏左上），整片天看起来像在慢慢平移，
+   而不是所有星星一起左右晃。 */
+@keyframes fsStarDriftFar {
+  from {
+    transform: translate3d(-40px, 22px, 0);
+  }
+  to {
+    transform: translate3d(40px, -24px, 0);
+  }
+}
+
+@keyframes fsStarDriftMid {
+  from {
+    transform: translate3d(-92px, 40px, 0);
+  }
+  to {
+    transform: translate3d(88px, -52px, 0);
+  }
+}
+
+@keyframes fsStarDriftNear {
+  from {
+    transform: translate3d(-158px, 72px, 0);
+  }
+  to {
+    transform: translate3d(150px, -86px, 0);
+  }
+}
+
+/* 流星：星点只会慢慢游，看久了还是「静止的一张图」，所以每隔十几秒划一道。
+   一条 1.6px 长发光的细线，40° 左右斜着穿过，靠 opacity 进场出场——不缩放、
+   不用 SVG，纯 transform + opacity，合成器一层就能跑完。 */
+#fsSceneMeteors {
+  position: absolute;
+  inset: 0;
+}
+
+#fsSceneMeteors s {
+  position: absolute;
+  display: block;
+  width: 128px;
+  height: 1.6px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, rgba(190, 220, 255, 0) 0%, rgba(214, 232, 255, 0.55) 55%, #ffffff 100%);
+  /* 尾巴挂在元素右端，头部（亮的一端）在前面飞 */
+  transform-origin: 100% 50%;
+  opacity: 0;
+  will-change: transform, opacity;
+  animation-name: fsMeteor;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+#fsSceneMeteors s:nth-child(1) {
+  left: 4%;
+  top: 10%;
+  animation-duration: 13s;
+  animation-delay: 1s;
+}
+
+#fsSceneMeteors s:nth-child(2) {
+  left: 34%;
+  top: 3%;
+  width: 96px;
+  height: 1.4px;
+  animation-duration: 17s;
+  animation-delay: 6.5s;
+}
+
+#fsSceneMeteors s:nth-child(3) {
+  left: 58%;
+  top: 20%;
+  width: 150px;
+  animation-duration: 23s;
+  animation-delay: 13s;
+}
+
+/* 前 22% 走完，其余时间停住并隐身，等下一轮 */
+@keyframes fsMeteor {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0) rotate(24deg) scaleX(0.6);
+  }
+  3% {
+    opacity: 0;
+  }
+  7% {
+    opacity: 1;
+  }
+  15% {
+    opacity: 1;
+  }
+  22% {
+    opacity: 0;
+    transform: translate3d(620px, 276px, 0) rotate(24deg) scaleX(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(620px, 276px, 0) rotate(24deg) scaleX(1);
+  }
+}
+
+/* 日间 / 未开 3D：流星也不放，和光斑一样彻底停住 */
+html:not(.dark) #fsSceneMeteors s,
+html:not(.fs3d) #fsSceneMeteors s {
+  animation-play-state: paused;
+}
+
+/* ---------- 竖屏：字更小、格更密，位置由 JS 重算 ---------- */
+@media (max-width: 1023px) {
+  /* 竖屏：字更小、格子更密，位置由 JS 按 168px 列宽重算 */
+  html.dark.fs3d #fsLyricContainer > .fs-lyric-line {
+    transition-duration: 0.42s;
+  }
+
+}
+
+/* ---------- 尊重「减弱动效」：整块 3D 退化成平面 ---------- */
+@media (prefers-reduced-motion: reduce) {
+  /* 减弱动效：星空停住，只留一块静态的夜空 */
+  .fs-star-layer,
+  .fs-star-bright s,
+  #fsSceneMeteors s {
+    animation: none;
+  }
+
+  /* 流星靠动画才存在，animation:none 会把它永久钉在 opacity:0，顺手隐藏 */
+  #fsSceneMeteors {
+    display: none;
+  }
+
+  /* 减弱动效：退回可以正常阅读的居中列表，散布场关掉 */
+  html.dark.fs3d #fsLyricPane.fs-lyric-box {
+    position: static;
+    width: auto !important;
+    height: auto !important;
+    pointer-events: auto;
+  }
+
+  html.dark.fs3d #fsLyricContainer {
+    position: relative;
+    height: 100% !important;
+    transform: none;
+  }
+
+  html.dark.fs3d #fsLyricContainer > .fs-lyric-line {
+    position: static;
+    transform: none !important;
+    opacity: 1 !important;
+    filter: none !important;
+    font-size: 1.15rem !important;
+    white-space: normal;
+  }
+
+  #fsScene {
+    display: none;
+  }
 }

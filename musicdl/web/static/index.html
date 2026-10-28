@@ -27,7 +27,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="/static/style.css?v=20261025_20">
+  <link rel="stylesheet" href="/static/style.css?v=20261028_56">
 </head>
 <body class="bg-gradient-to-br from-[#f8fafc] via-[#f0fdf4]/50 to-[#f0fdfa]/70 text-slate-800 min-h-screen flex flex-col font-sans selection:bg-emerald-500 selection:text-white pb-28">
 
@@ -769,6 +769,12 @@
     <div id="fsBgBlur" class="absolute inset-0 bg-cover bg-center filter blur-3xl opacity-25 scale-125 pointer-events-none transition-all duration-1000"></div>
     <div id="fsBgVeil" class="absolute inset-0 pointer-events-none"></div>
 
+    <!-- 3D 场景层：近黑夜空 + 星空 + 流星（仅夜间 3D 剧场显示，铺满全屏） -->
+    <div id="fsScene" class="absolute inset-0 pointer-events-none overflow-hidden">
+      <div id="fsSceneStars"></div>
+      <div id="fsSceneMeteors"><s></s><s></s><s></s></div>
+    </div>
+
     <!-- 顶栏：收起最小化按钮 + 正在播放状态 + 顶部右侧下载 (加 shrink-0 锁定高度并适配移动端刘海安全区) -->
     <header class="relative z-10 px-4 sm:px-6 pt-[max(0.75rem,env(safe-area-inset-top))] pb-2.5 sm:py-4 flex items-center justify-between border-b border-emerald-100/80 bg-white/80 backdrop-blur-md shrink-0">
       <button id="fsCloseBtn" class="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-3.5 py-1.5 rounded-xl bg-white/90 hover:bg-emerald-50 border border-emerald-200/80 text-slate-700 hover:text-emerald-800 transition shadow-xs group shrink-0" title="收起播放器 (Esc)">
@@ -784,6 +790,22 @@
       </div>
 
       <div class="flex items-center gap-2 shrink-0">
+        <!-- 日间 / 夜间切换：不用退回主页面，播放页内直接切（图标同步主页面那个开关） -->
+        <button id="fsThemeToggleBtn" class="flex items-center justify-center px-2.5 py-1.5 rounded-xl bg-white/90 hover:bg-emerald-50 border border-emerald-200/80 text-slate-700 hover:text-emerald-800 transition shadow-xs shrink-0" title="切换夜间模式" aria-label="切换夜间模式">
+          <svg id="fsThemeMoonIcon" class="w-4 h-4 text-emerald-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+          </svg>
+          <svg id="fsThemeSunIcon" class="hidden w-4 h-4 text-emerald-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+          </svg>
+        </button>
+        <button id="fs3dToggleBtn" class="hidden items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-white/90 hover:bg-emerald-50 border border-emerald-200/80 text-slate-700 hover:text-emerald-800 transition shadow-xs shrink-0 whitespace-nowrap" title="切换 3D 歌词剧场" aria-pressed="true">
+          <svg class="w-4 h-4 text-emerald-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 2.8l8 4.4v9.6l-8 4.4-8-4.4V7.2l8-4.4z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 2.8v8.8m0 0l8 4.4m-8-4.4L4 16"/>
+          </svg>
+          <span id="fs3dLabel" class="hidden sm:inline text-xs font-semibold whitespace-nowrap">3D</span>
+        </button>
         <button id="fsPlayModeBtn" class="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 rounded-xl bg-white/90 hover:bg-emerald-50 border border-emerald-200/80 text-slate-700 hover:text-emerald-800 transition shadow-xs shrink-0 whitespace-nowrap" title="当前播放模式: 列表循环">
           <svg id="modeLoopIcon" class="w-4 h-4 text-emerald-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -802,8 +824,8 @@
     <!-- 中间主内容区：左侧黑胶唱片 + 右侧沉浸式歌词 (overflow-hidden 禁止外层滚动，避免被推移) -->
     <main class="relative z-10 flex-1 min-h-0 overflow-hidden flex flex-col lg:grid lg:grid-cols-12 gap-2 sm:gap-5 lg:gap-8 items-center max-w-7xl w-full mx-auto px-4 sm:px-6 py-2 sm:py-4">
       
-      <!-- 左栏：黑胶转盘与歌曲档案 (小屏下精致缩小，高度压低，不侵占垂直视口) -->
-      <div class="lg:col-span-5 flex flex-col items-center justify-center space-y-2 sm:space-y-6 shrink-0 pt-1 lg:pt-0">
+      <!-- 左栏：封面卡与歌曲档案 (日间为方形封面卡；夜间整栏隐藏，让位给歌词剧场) -->
+      <div id="fsCoverPane" class="lg:col-span-5 flex flex-col items-center justify-center space-y-2 sm:space-y-6 shrink-0 pt-1 lg:pt-0">
         <!-- 黑胶唱盘包装容器 -->
         <div class="relative flex items-center justify-center py-2 sm:py-4">
           <!-- 唱针 (Vinyl Stylus/Tonearm) -->
@@ -826,8 +848,8 @@
             <!-- 黑胶中央专辑封面 -->
             <img id="fsCoverImg" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
                  class="w-28 h-28 sm:w-40 sm:h-40 md:w-44 md:h-44 rounded-full object-cover border-3 sm:border-4 border-white shadow-lg z-10 bg-slate-100">
-            <!-- 唱片中心小圆孔 -->
-            <div class="absolute w-5 h-5 rounded-full bg-slate-900 border-2 border-emerald-400 z-10"></div>
+            <!-- 唱片中心小圆孔 (日间方形封面版隐藏) -->
+            <div id="vinylHole" class="absolute w-5 h-5 rounded-full bg-slate-900 border-2 border-emerald-400 z-10"></div>
           </div>
         </div>
 
@@ -839,10 +861,10 @@
       </div>
 
       <!-- 右栏：巨幕同步滚动歌词流 (桌面端聚焦 5-6 行歌词，四周平滑呼吸渐变消融) -->
-      <div class="lg:col-span-7 w-full flex-1 lg:flex-none min-h-0 flex flex-col justify-center relative fs-lyric-box p-1 sm:p-3 overflow-hidden my-auto">
+      <div id="fsLyricPane" class="lg:col-span-7 w-full flex-1 lg:flex-none min-h-0 flex flex-col justify-center relative fs-lyric-box p-1 sm:p-3 overflow-hidden my-auto">
         <!-- 滚动歌词内容器 (纯 CSS Mask 四周自然呼吸渐隐消融) -->
         <div id="fsLyricContainer" class="h-full overflow-y-auto px-2 sm:px-6 py-4 sm:py-16 lg:py-24 text-center lg:text-left space-y-2.5 sm:space-y-4 select-none fs-lyric-scroll">
-          <div class="text-slate-400 font-medium text-xs sm:text-base py-10 sm:py-20 text-center">暂无歌词或播放曲目未加载</div>
+          <div id="fsLyricEmpty" class="text-slate-400 font-medium text-xs sm:text-base py-10 sm:py-20 text-center">暂无歌词或播放曲目未加载</div>
         </div>
       </div>
 
@@ -855,7 +877,9 @@
         <!-- 进度与时间：小屏独占一行置顶，桌面端并入同一条水平轴 -->
         <div class="order-1 w-full sm:w-auto sm:order-2 sm:flex-1 flex items-center gap-2.5 sm:gap-4 min-w-0 text-xs font-mono text-slate-500">
           <span id="fsCurrentTime" class="w-10 sm:w-12 text-right font-mono text-slate-600 text-[11px] sm:text-xs shrink-0">00:00</span>
-          <div class="relative flex-1 flex items-center min-w-0">
+          <div id="fsSeekTrack" class="relative flex-1 flex items-center min-w-0">
+            <!-- 悬停气泡：显示该落点对应的剩余时间 -->
+            <span id="fsSeekBubble" class="fs-seek-bubble" aria-hidden="true">-00:00</span>
             <input type="range" id="fsSeekSlider" min="0" max="100" step="0.1" value="0"
                    aria-label="播放进度" class="sf-range sf-range--lg w-full">
           </div>
@@ -915,6 +939,6 @@
   <audio id="audioElement" preload="none"></audio>
   <script src="/static/libs/qrcode.min.js"></script>
   <script src="/static/libs/jsQR.min.js"></script>
-  <script src="/static/app.js?v=20261025_20"></script>
+  <script src="/static/app.js?v=20261028_56"></script>
 </body>
 </html>

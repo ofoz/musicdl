@@ -117,6 +117,8 @@ const fsLyricContainer = document.getElementById('fsLyricContainer');
 const fsCurrentTime = document.getElementById('fsCurrentTime');
 const fsDuration = document.getElementById('fsDuration');
 const fsSeekSlider = document.getElementById('fsSeekSlider');
+const fsSeekTrack = document.getElementById('fsSeekTrack');
+const fsSeekBubble = document.getElementById('fsSeekBubble');
 const fsPlayModeBtn = document.getElementById('fsPlayModeBtn');
 const modeLoopIcon = document.getElementById('modeLoopIcon');
 const modeRepeatOneIcon = document.getElementById('modeRepeatOneIcon');
@@ -128,14 +130,31 @@ const fsPlayIcon = document.getElementById('fsPlayIcon');
 const fsPauseIcon = document.getElementById('fsPauseIcon');
 const fsNextBtn = document.getElementById('fsNextBtn');
 const fsVolumeSlider = document.getElementById('fsVolumeSlider');
+const fsSceneStars = document.getElementById('fsSceneStars');
+const fs3dToggleBtn = document.getElementById('fs3dToggleBtn');
+const fs3dLabel = document.getElementById('fs3dLabel');
 
-// 主题切换（日间 / 夜间）
+// 主题切换（日间 / 夜间）：主页面一个、全屏播放页顶栏一个，共用一套状态
 const themeToggleBtn = document.getElementById('themeToggleBtn');
 const themeMoonIcon = document.getElementById('themeMoonIcon');
 const themeSunIcon = document.getElementById('themeSunIcon');
+const fsThemeToggleBtn = document.getElementById('fsThemeToggleBtn');
+const fsThemeMoonIcon = document.getElementById('fsThemeMoonIcon');
+const fsThemeSunIcon = document.getElementById('fsThemeSunIcon');
 
 // ===== 主题切换逻辑 =====
 const THEME_STORAGE_KEY = 'soundflow-theme';
+
+// ===== 夜间 3D 歌词剧场开关 =====
+const FS3D_STORAGE_KEY = 'soundflow-fs3d';
+let fs3dOn = true;
+let fs3dLayoutApplied = false;
+try {
+  fs3dOn = localStorage.getItem(FS3D_STORAGE_KEY) !== '0';
+} catch (e) { /* 隐私模式忽略 */ }
+const fs3dReduceMotion = window.matchMedia
+  ? window.matchMedia('(prefers-reduced-motion: reduce)')
+  : null;
 
 function currentTheme() {
   return document.documentElement.classList.contains('dark') ? 'dark' : 'light';
@@ -145,27 +164,36 @@ function applyTheme(theme, persist = true) {
   const isDark = theme === 'dark';
   document.documentElement.classList.toggle('dark', isDark);
   // 浅色态显示月亮（点击进入夜间），夜间态显示太阳（点击回到白天）
-  if (themeMoonIcon) themeMoonIcon.classList.toggle('hidden', isDark);
-  if (themeSunIcon) themeSunIcon.classList.toggle('hidden', !isDark);
-  if (themeToggleBtn) {
-    const label = isDark ? '切换日间模式' : '切换夜间模式';
-    themeToggleBtn.title = label;
-    themeToggleBtn.setAttribute('aria-label', label);
-  }
+  // 播放页顶栏那个按钮是同一状态的第二个入口，图标与文案必须一起同步
+  const label = isDark ? '切换日间模式' : '切换夜间模式';
+  [
+    [themeMoonIcon, themeSunIcon, themeToggleBtn],
+    [fsThemeMoonIcon, fsThemeSunIcon, fsThemeToggleBtn]
+  ].forEach(([moon, sun, btn]) => {
+    if (moon) moon.classList.toggle('hidden', isDark);
+    if (sun) sun.classList.toggle('hidden', !isDark);
+    if (btn) {
+      btn.title = label;
+      btn.setAttribute('aria-label', label);
+    }
+  });
   if (persist) {
     try {
       localStorage.setItem(THEME_STORAGE_KEY, theme);
     } catch (e) { /* 隐私模式等场景忽略 */ }
   }
+  // 夜间会把左侧封面栏整栏收起、歌词区重新排版，3D 开关也跟着主题走，统一重排一次
+  applyFs3dState();
 }
 
-if (themeToggleBtn) {
-  themeToggleBtn.onclick = () => {
-    const next = currentTheme() === 'dark' ? 'light' : 'dark';
-    applyTheme(next);
-    showToast(next === 'dark' ? '已切换到夜间模式 🌙' : '已切换到日间模式 ☀️');
-  };
+function toggleTheme() {
+  const next = currentTheme() === 'dark' ? 'light' : 'dark';
+  applyTheme(next);
+  showToast(next === 'dark' ? '已切换到夜间模式 🌙' : '已切换到日间模式 ☀️');
 }
+
+if (themeToggleBtn) themeToggleBtn.onclick = toggleTheme;
+if (fsThemeToggleBtn) fsThemeToggleBtn.onclick = toggleTheme;
 // 首屏同步图标状态（<head> 的预加载脚本已挂好 dark 类，这里只做 UI 同步）
 applyTheme(currentTheme(), false);
 
@@ -1059,6 +1087,330 @@ searchInput.oninput = () => {
 searchBtn.onclick = performSearch;
 
 // 5. Fullscreen Player & Controller Logic
+// ---- 控制区闲置淡出（仅夜间生效，浅色主题不显示该状态） ----
+const FS_IDLE_MS = 3000;
+let fsIdleTimer = 0;
+
+function wakeFullscreenChrome() {
+  if (!fullscreenPlayer) return;
+  fullscreenPlayer.classList.remove('fs-idle');
+  clearTimeout(fsIdleTimer);
+  if (!state.isFullscreenOpen) return;
+  fsIdleTimer = setTimeout(() => {
+    if (!state.isFullscreenOpen) return;
+    // 暂停时不淡出：进度条是暂停后唯一还需要看的东西
+    if (audioElement.paused) return;
+    // 音量面板开着时不能藏，否则看起来像面板自己消失了
+    const volPanel = document.getElementById('fsVolumePanel');
+    if (volPanel && !volPanel.classList.contains('hidden')) return;
+    fullscreenPlayer.classList.add('fs-idle');
+  }, FS_IDLE_MS);
+}
+
+function stopFullscreenChromeIdle() {
+  clearTimeout(fsIdleTimer);
+  if (fullscreenPlayer) fullscreenPlayer.classList.remove('fs-idle');
+}
+
+['pointermove', 'pointerdown', 'wheel', 'keydown'].forEach((evt) => {
+  fullscreenPlayer.addEventListener(evt, wakeFullscreenChrome, { passive: true });
+});
+
+// 指针移出播放器（比如移到浏览器外）不必等满 3 秒，直接收起来
+fullscreenPlayer.addEventListener('pointerleave', () => {
+  clearTimeout(fsIdleTimer);
+  if (state.isFullscreenOpen && !audioElement.paused) {
+    fullscreenPlayer.classList.add('fs-idle');
+  }
+});
+
+// ===== 夜间 3D 歌词剧场 =====
+// 与平面版的根本区别：不再滚动容器，而是把每行按「与当前行的索引差」摆进透视空间。
+// 近大远小由 perspective 算出来，行距/纵深只在 JS 里调，CSS 不参与定位。
+function fs3dSupported() {
+  return !(fs3dReduceMotion && fs3dReduceMotion.matches);
+}
+
+function isFs3dActive() {
+  return fs3dOn && fs3dSupported() && document.documentElement.classList.contains('dark');
+}
+
+// ---------- 散布场：把每一句钉在屏幕上的固定位置 ----------
+// 位置只用「行号 + 固定种子」算：同一首歌每次进全屏都是同一套分布（不会每次刷新都变样），
+// 换歌才换图案。切歌词时位置完全不动，只有亮度和缩放走 —— 所以看到的是光在扫过字。
+function fsSpreadRand(seed) {
+  let t = (seed + 0x6d2b79f5) | 0;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
+let fsSpreadCache = null;
+
+function fsSpreadBuild(count) {
+  const W = Math.max(320, window.innerWidth);
+  const H = Math.max(320, window.innerHeight);
+  const key = W + 'x' + H + '#' + count;
+  if (fsSpreadCache && fsSpreadCache.key === key) return fsSpreadCache;
+
+  const narrow = W < 1024;
+  // 格子跟着屏幕走：太稀会挤成一团，太密又显得空
+  const cols = Math.max(3, Math.round(W / (narrow ? 172 : 238)));
+  const rows = Math.max(3, Math.round(H / (narrow ? 106 : 120)));
+  const cells = cols * rows;
+  const cellW = W / cols;
+
+  // 固定种子打乱格子：免得歌词按顺序从左上排到右下，那就不是「散布」了
+  const perm = new Array(cells);
+  for (let i = 0; i < cells; i++) perm[i] = i;
+  for (let i = cells - 1; i > 0; i--) {
+    const j = Math.floor(fsSpreadRand(i * 977 + count * 31) * (i + 1));
+    const tmp = perm[i];
+    perm[i] = perm[j];
+    perm[j] = tmp;
+  }
+
+  // 顶栏和底部播放条要让开，否则当前行会被压在控件底下。
+  // 用像素而不是百分比：顶底栏是固定高度，屏越高百分比留白越多、越浪费。
+  const topPx = narrow ? 86 : 78;
+  const botPx = narrow ? 162 : 140;
+  const spanY = Math.max(90, H - topPx - botPx);
+  const cellH = spanY / rows;
+  const items = [];
+
+  for (let i = 0; i < count; i++) {
+    const slot = perm[i % cells];
+    // 歌词比格子多时，第二圈往后整体压暗压小，避免叠成一坨
+    const ring = Math.floor(i / cells);
+    const lift = Math.max(0.18, 1 - ring * 0.45);
+    const col = slot % cols;
+    const row = Math.floor(slot / cols);
+    const jx = (fsSpreadRand(i * 31 + 7) - 0.5) * cellW * 0.44;
+    const jy = (fsSpreadRand(i * 53 + 11) - 0.5) * cellH * 0.46;
+    const depth = fsSpreadRand(i * 71 + 13); // 0 最远 1 最近
+
+    items.push({
+      x: (col + 0.5) * cellW + jx,
+      y: topPx + (row + 0.5) * cellH + jy,
+      rot: (fsSpreadRand(i * 97 + 17) - 0.5) * 10,
+      scale: (0.8 + depth * 0.34) * lift,
+      // 夜里满屏都是这些暗字，基线压到 0.19~0.45：能读出轮廓、能看出「一共有哪些词」，
+      // 但不会一片灰白把黑底糊掉
+      opacity: (0.19 + depth * 0.26) * lift,
+      blur: depth < 0.3 ? 1.2 : 0,
+      // 窄屏格子本来就小，行宽再超出格子就会跟邻列压在一起
+      maxW: cellW * (narrow ? 1.02 : 1.2)
+    });
+  }
+
+  fsSpreadCache = { key: key, W: W, H: H, cols: cols, rows: rows, cells: cells, items: items };
+  return fsSpreadCache;
+}
+
+// 视口变了或换了歌，缓存要作废
+function resetFsSpread() {
+  fsSpreadCache = null;
+}
+
+function clearFs3dLines() {
+  if (!fsLyricContainer) return;
+  Array.prototype.forEach.call(fsLyricContainer.children, (el) => {
+    if (!el.classList || !el.classList.contains('fs-lyric-line')) return;
+    el.style.removeProperty('transform');
+    el.style.removeProperty('font-size');
+    el.style.opacity = '';
+    el.style.filter = '';
+    el.style.zIndex = '';
+  });
+}
+
+// 用 canvas 量文字宽度，不用 scrollWidth：这些行是绝对定位块，
+// scrollWidth 恒等于容器宽度，永远「超标」，会把每一行都白缩 8%（实测 1.85rem 只拿到 27.23px）。
+const fs3dMeasureCtx = document.createElement('canvas').getContext('2d');
+
+function layoutFsLyric3D(activeIdx) {
+  if (!fsLyricContainer) return;
+  const rows = [];
+  Array.prototype.forEach.call(fsLyricContainer.children, (el) => {
+    if (el.classList && el.classList.contains('fs-lyric-line')) rows.push(el);
+  });
+  if (!rows.length) return;
+
+  const spread = fsSpreadBuild(rows.length);
+  const basePx = spread.W < 1024 ? 17 : 20;
+  const centerX = spread.W / 2;
+
+  for (let i = 0; i < rows.length; i++) {
+    const el = rows[i];
+    const it = spread.items[i];
+    const dist = Math.abs(i - activeIdx);
+    const isActive = dist === 0;
+
+    let opacity = it.opacity;
+    let rot = it.rot;
+    let blur = it.blur;
+    let wantPx = basePx;
+    let scale = it.scale;
+
+    if (isActive) {
+      // 唱到的这句就地亮起：不搬到屏幕中央，位置始终是它散布时的那一格，
+      // 只是放大、回正、去模糊 —— 看到的是「一束光扫过满屏的字」，扫到哪句哪句亮
+      opacity = 1;
+      rot = 0;
+      blur = 0;
+      scale = Math.min(1.16, it.scale * 1.06);
+      wantPx = basePx * (spread.W < 1024 ? 1.62 : 1.72);
+    } else if (dist === 1) {
+      // 相邻两句稍微让一下，不抢主角，但也不至于暗到看不见
+      scale = it.scale * 1.02;
+      opacity = it.opacity * 0.6;
+    } else if (dist <= 3) {
+      opacity = it.opacity * 0.62;
+    }
+
+    // 量出文字在基准字号下的宽度，再按目标字号换算真实宽度：
+    // 一是为了长句缩字，二是为了让贴近左右边缘的句子能收回来，不被屏幕切掉
+    let textW = 0;
+    if (fs3dMeasureCtx) {
+      const cs = getComputedStyle(el);
+      const text = (el.textContent || '').trim();
+      if (text) {
+        fs3dMeasureCtx.font = cs.fontStyle + ' ' + cs.fontWeight + ' ' + basePx + 'px ' + cs.fontFamily;
+        textW = fs3dMeasureCtx.measureText(text).width || 0;
+      }
+    }
+    if (textW > 0) {
+      // 当前行就地放大，能多占一点横向空间，但别横跨半个屏幕把邻居全糊住
+      const avail = isActive ? Math.min(spread.W * 0.8, it.maxW * 2.3) : it.maxW;
+      const fit = Math.min(1, avail / textW);
+      wantPx = wantPx * Math.max(0.46, fit);
+    }
+    const finalPx = Math.max(10, wantPx);
+    const finalW = textW ? textW * (finalPx / basePx) * scale : 0;
+
+    let x = it.x;
+    const y = it.y;
+    if (finalW > 0) {
+      // 左右各留 14px：散布可以贴边，但不能被屏幕切断。
+      // 当前行同样只做「收进来」的限位，不会被拉到中间。
+      // padding 是 0.3em×2，不在测量宽度里，得一起算进来，否则放大后贴边被切
+      const half = finalW / 2 + 14 + finalPx * 0.3;
+      x = half * 2 > spread.W ? centerX : Math.min(spread.W - half, Math.max(half, x));
+    }
+
+    // 字号用 important：.fs-lyric-active 那条样式是 !important，普通 inline 压不住
+    el.style.setProperty('font-size', finalPx.toFixed(1) + 'px', 'important');
+    el.style.transform = 'translate3d(' + x.toFixed(1) + 'px, ' + y.toFixed(1) + 'px, 0)'
+      + ' translate(-50%, -50%) rotate(' + rot.toFixed(2) + 'deg) scale(' + scale.toFixed(2) + ')';
+    el.style.opacity = opacity.toFixed(2);
+    el.style.filter = blur ? 'blur(' + blur + 'px)' : 'none';
+    el.style.zIndex = isActive ? '60' : String(10 + Math.round(it.scale * 20) - dist);
+  }
+  fs3dLayoutApplied = true;
+}
+
+// 星空：三层不同远近的星点，用 box-shadow 一次画出上百颗（几百个 DOM 节点太贵），
+// 每层各自闪烁 + 极慢漂移形成视差；再补几颗带光晕的亮星。
+// 随机数用 fsSpreadRand（固定种子）：同一台设备每次进来星图一致，不会闪一下就换一片天。
+function buildFsStarField() {
+  if (!fsSceneStars || fsSceneStars.childElementCount) return;
+  const W = Math.max(900, window.innerWidth);
+  const H = Math.max(700, window.innerHeight);
+  const narrow = W < 1024;
+  // 星场比屏幕大一圈，漂移时才不会把边缘漂空；密度按屏幕面积补，
+  // 否则大屏上星会被摊得太稀、小屏又会糊成一片
+  const spanX = Math.round(Math.max(W, 1100) * 1.12);
+  const spanY = Math.round(Math.max(H, 760) * 1.08);
+  const dens = Math.min(1.7, Math.max(0.8, (W * H) / (1440 * 900)));
+
+  const layers = [
+    { cls: 'fs-star-far', count: Math.round((narrow ? 260 : 520) * dens), size: 1, alpha: [0.3, 0.82] },
+    { cls: 'fs-star-mid', count: Math.round((narrow ? 140 : 270) * dens), size: 1.6, alpha: [0.42, 0.96] },
+    { cls: 'fs-star-near', count: Math.round((narrow ? 64 : 115) * dens), size: 2.2, alpha: [0.58, 1] }
+  ];
+
+  const frag = document.createDocumentFragment();
+  layers.forEach((cfg, li) => {
+    const el = document.createElement('div');
+    el.className = 'fs-star-layer ' + cfg.cls;
+    el.style.width = cfg.size + 'px';
+    el.style.height = cfg.size + 'px';
+    const parts = [];
+    for (let i = 0; i < cfg.count; i++) {
+      const seed = i * 131 + li * 977 + 17;
+      const x = ((fsSpreadRand(seed) - 0.5) * spanX).toFixed(1);
+      const y = ((fsSpreadRand(seed + 37) - 0.5) * spanY).toFixed(1);
+      const op = (cfg.alpha[0] + fsSpreadRand(seed + 71) * (cfg.alpha[1] - cfg.alpha[0])).toFixed(2);
+      // 少数偏暖的星，全白会显得像噪点
+      const warm = fsSpreadRand(seed + 113) > 0.84;
+      const rgb = warm ? '255, 238, 208' : '222, 240, 255';
+      parts.push(x + 'px ' + y + 'px 0 rgba(' + rgb + ', ' + op + ')');
+    }
+    el.style.boxShadow = parts.join(', ');
+    frag.appendChild(el);
+  });
+
+  // 亮星：真正会呼吸的那几颗，给星空一点「活气」
+  const bright = document.createElement('div');
+  bright.className = 'fs-star-bright';
+  for (let i = 0; i < (narrow ? 6 : 10); i++) {
+    const star = document.createElement('s');
+    const size = 2 + fsSpreadRand(i * 53 + 7) * 2.2;
+    star.style.width = size.toFixed(1) + 'px';
+    star.style.height = star.style.width;
+    star.style.left = (6 + fsSpreadRand(i * 89 + 29) * 88).toFixed(2) + '%';
+    star.style.top = (8 + fsSpreadRand(i * 67 + 41) * 78).toFixed(2) + '%';
+    star.style.animationDuration = (4.5 + fsSpreadRand(i * 31 + 59) * 5).toFixed(1) + 's';
+    star.style.animationDelay = (-fsSpreadRand(i * 23 + 83) * 8).toFixed(1) + 's';
+    bright.appendChild(star);
+  }
+  frag.appendChild(bright);
+  fsSceneStars.appendChild(frag);
+}
+
+function updateFs3dButton() {
+  if (!fs3dToggleBtn) return;
+  const dark = document.documentElement.classList.contains('dark');
+  fs3dToggleBtn.classList.toggle('hidden', !dark);
+  fs3dToggleBtn.classList.toggle('flex', dark);
+  fs3dToggleBtn.setAttribute('aria-pressed', fs3dOn ? 'true' : 'false');
+  fs3dToggleBtn.title = fs3dOn ? '关闭 3D 歌词剧场' : '开启 3D 歌词剧场';
+  if (fs3dLabel) fs3dLabel.innerText = fs3dOn ? '3D' : '2D';
+}
+
+function applyFs3dState() {
+  const active = isFs3dActive();
+  document.documentElement.classList.toggle('fs3d', active);
+  updateFs3dButton();
+  if (active) {
+    buildFsStarField();
+    // 平面模式可能留有滚动残留，切进 3D 必须归零，否则所有行会整体上移
+    if (fsLyricContainer) fsLyricContainer.scrollTop = 0;
+  } else {
+    fs3dLayoutApplied = false;
+    clearFs3dLines();
+  }
+  // 舞台高度 / 透视 / 定位方式都变了，强制重排一次
+  requestAnimationFrame(() => {
+    syncLyric(audioElement.currentTime || 0, { force: true });
+  });
+}
+
+if (fs3dToggleBtn) {
+  fs3dToggleBtn.onclick = () => {
+    fs3dOn = !fs3dOn;
+    try {
+      localStorage.setItem(FS3D_STORAGE_KEY, fs3dOn ? '1' : '0');
+    } catch (e) { /* 忽略 */ }
+    applyFs3dState();
+    showToast(fs3dOn ? '已开启 3D 歌词剧场 ✨' : '已切回平面歌词');
+  };
+}
+
+if (fs3dReduceMotion && fs3dReduceMotion.addEventListener) {
+  fs3dReduceMotion.addEventListener('change', applyFs3dState);
+}
+
 function openFullscreenPlayer() {
   if (state.isFullscreenOpen) return;
   fullscreenPlayer.classList.remove('hidden');
@@ -1069,6 +1421,7 @@ function openFullscreenPlayer() {
     fullscreenPlayer.classList.add('player-open');
   });
   state.isFullscreenOpen = true;
+  wakeFullscreenChrome();
   // 关键修复：隐藏期间全屏歌词容器没有布局高度，此前的同步全部无效（scrollTop 恒为 0）
   // 因此打开后必须无视「当前行未变化」再强制定位一次，否则歌词会停在顶部直到下一行才突然跳过去
   requestAnimationFrame(() => {
@@ -1078,6 +1431,7 @@ function openFullscreenPlayer() {
 
 function closeFullscreenPlayer() {
   if (!state.isFullscreenOpen) return;
+  stopFullscreenChromeIdle();
   fullscreenPlayer.classList.remove('player-open');
   setTimeout(() => {
     if (!state.isFullscreenOpen) {
@@ -1114,6 +1468,105 @@ function useDefaultCover(img) {
   img.addEventListener('error', () => useDefaultCover(img));
 });
 
+// ===== 全屏背景主色：从封面抽一次色，写进 --fs-ambient / --fs-ambient-deep =====
+// 背景不再是写死的 #f8fafc，而是跟着封面走的一层环境色；取色失败就退回 CSS 里的品牌兜底色，
+// 绝不影响播放。抽色结果按封面地址缓存，回切同一首不会重复计算。
+const AMBIENT_CACHE = new Map();
+let ambientSeq = 0;
+
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const d = max - min;
+  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+  let h = 0;
+  if (d !== 0) {
+    if (max === r) h = ((g - b) / d) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60;
+    if (h < 0) h += 360;
+  }
+  return { h, s, l };
+}
+
+function setAmbientVars(light, deep) {
+  const root = document.documentElement;
+  root.style.setProperty('--fs-ambient', light);
+  root.style.setProperty('--fs-ambient-deep', deep);
+}
+
+function resetAmbient() {
+  const root = document.documentElement;
+  root.style.removeProperty('--fs-ambient');
+  root.style.removeProperty('--fs-ambient-deep');
+}
+
+// 缩到 24×24 再统计：丢掉近黑/近白/低饱和像素，剩下的按饱和度和中间调加权求平均
+function extractAmbient(img) {
+  const size = 24;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.drawImage(img, 0, 0, size, size);
+  let data;
+  try {
+    data = ctx.getImageData(0, 0, size, size).data;
+  } catch (e) {
+    return null; // 跨域图片会污染画布，getImageData 直接抛错
+  }
+  let rSum = 0, gSum = 0, bSum = 0, weight = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 200) continue;
+    const r = data[i], g = data[i + 1], b = data[i + 2];
+    const { s, l } = rgbToHsl(r, g, b);
+    if (l < 0.12 || l > 0.9 || s < 0.08) continue;
+    const w = s * (1 - Math.abs(l - 0.5));
+    rSum += r * w; gSum += g * w; bSum += b * w; weight += w;
+  }
+  if (weight < 0.5) return null;
+  return rgbToHsl(
+    Math.max(0, Math.min(255, rSum / weight)),
+    Math.max(0, Math.min(255, gSum / weight)),
+    Math.max(0, Math.min(255, bSum / weight))
+  );
+}
+
+function applyAmbientFromCover(coverUrl) {
+  const seq = ++ambientSeq;
+  if (!coverUrl) {
+    resetAmbient();
+    return;
+  }
+  const cached = AMBIENT_CACHE.get(coverUrl);
+  if (cached) {
+    setAmbientVars(cached.light, cached.deep);
+    return;
+  }
+  const img = new Image();
+  img.crossOrigin = 'anonymous'; // 同源的 /api/cover 不受影响；跨域源站失败时保留上一组颜色
+  img.decoding = 'async';
+  img.onload = () => {
+    if (seq !== ambientSeq) return;
+    const hsl = extractAmbient(img);
+    if (!hsl) return;
+    // 日间：同一色相拉到极浅，像纸面上一层薄光；夜间：同一色相压到近黑，留氛围不抢歌词
+    const satL = Math.min(34, Math.max(9, hsl.s * 55)).toFixed(0);
+    const satD = Math.min(28, Math.max(10, hsl.s * 42)).toFixed(0);
+    const light = `hsl(${hsl.h.toFixed(0)} ${satL}% 95%)`;
+    const deep = `hsl(${hsl.h.toFixed(0)} ${satD}% 7%)`;
+    AMBIENT_CACHE.set(coverUrl, { light, deep });
+    if (seq !== ambientSeq) return;
+    setAmbientVars(light, deep);
+  };
+  img.onerror = () => { /* 保持现状即可 */ };
+  img.src = coverUrl;
+}
+
 function updatePlayerCover(coverUrl) {
   const hasCover = Boolean(coverUrl);
   const finalCover = hasCover ? coverUrl : DEFAULT_COVER;
@@ -1128,6 +1581,7 @@ function updatePlayerCover(coverUrl) {
   if (fsBgBlur) {
     fsBgBlur.style.backgroundImage = hasCover ? `url('${coverUrl}')` : 'none';
   }
+  applyAmbientFromCover(hasCover ? coverUrl : '');
 }
 
 // ============================================================================
@@ -1733,6 +2187,8 @@ audioElement.onpause = () => {
   // 暂停后不会再触发 timeupdate，这里必须补一次，
   // 否则「暂停状态下歌词才加载出来」会一直没有任何高亮
   syncLyric(audioElement.currentTime || 0, { force: true });
+  // 夜间控制区可能正处于淡出状态：暂停时把顶栏/底栏叫回来，否则看不到进度
+  if (state.isFullscreenOpen) wakeFullscreenChrome();
 };
 
 audioElement.onended = () => {
@@ -1785,6 +2241,40 @@ const handleSeek = (slider) => {
 
 seekSlider.oninput = () => handleSeek(seekSlider);
 fsSeekSlider.oninput = () => handleSeek(fsSeekSlider);
+
+// ===== 进度条悬停气泡：指针落在哪，就提示「到这里还剩多久」 =====
+function fsSeekBubbleAt(clientX) {
+  if (!fsSeekBubble || !fsSeekSlider) return;
+  const rect = fsSeekSlider.getBoundingClientRect();
+  if (!rect.width) return;
+  const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+  const duration = Number.isFinite(audioElement.duration) ? audioElement.duration : 0;
+  fsSeekBubble.textContent = duration
+    ? '-' + formatTime(Math.max(0, duration * (1 - ratio)))
+    : '--:--';
+  // 贴边时把气泡往回收一点，避免超出进度条两端的可视区
+  fsSeekBubble.style.left = Math.min(94, Math.max(6, ratio * 100)).toFixed(2) + '%';
+}
+
+function showFsSeekBubble(clientX) {
+  if (!fsSeekBubble) return;
+  fsSeekBubble.classList.add('is-visible');
+  if (typeof clientX === 'number') fsSeekBubbleAt(clientX);
+}
+
+function hideFsSeekBubble() {
+  if (fsSeekBubble) fsSeekBubble.classList.remove('is-visible');
+}
+
+if (fsSeekTrack && fsSeekBubble) {
+  fsSeekTrack.addEventListener('pointermove', (e) => showFsSeekBubble(e.clientX));
+  fsSeekTrack.addEventListener('pointerdown', (e) => showFsSeekBubble(e.clientX));
+  fsSeekTrack.addEventListener('pointerleave', hideFsSeekBubble);
+  window.addEventListener('pointerup', () => {
+    // 拖完松手：指针已经不在进度条上就收起气泡
+    if (!fsSeekTrack.matches(':hover')) hideFsSeekBubble();
+  });
+}
 
 // 新曲目开始载入时清空已播放填充，避免带上一首的进度残影
 audioElement.addEventListener('loadstart', () => {
@@ -2157,11 +2647,29 @@ function syncLyric(currentTime, options) {
   }
 
   // 2. 全屏大播放器歌词同步高亮与居中滚动（容器级滚动，不牵连外层页面）
-  document.querySelectorAll('.fs-lyric-line').forEach(el => el.classList.remove('fs-lyric-active'));
+  document.querySelectorAll('.fs-lyric-line').forEach(el => {
+    el.classList.remove('fs-lyric-active');
+    el.classList.remove('fs-lyric-adj');
+  });
   const fsTarget = document.querySelector(`.fs-lyric-line[data-fs-index="${idx}"]`);
   if (fsTarget) {
     fsTarget.classList.add('fs-lyric-active');
-    centerLyricLine(fsLyricContainer, fsTarget);
+    // 相邻两行给中间档字号：形成「远景—近景—当前」三层，比只有亮/暗两态更有纵深感
+    const prevLine = fsLyricContainer.children[idx - 1];
+    const nextLine = fsLyricContainer.children[idx + 1];
+    if (prevLine) prevLine.classList.add('fs-lyric-adj');
+    if (nextLine) nextLine.classList.add('fs-lyric-adj');
+    if (isFs3dActive()) {
+      // 3D 剧场：不滚容器，按索引差重新摆位
+      layoutFsLyric3D(idx);
+    } else {
+      if (fs3dLayoutApplied) {
+        // 刚从 3D 切回平面：先清掉 inline 位移，再交给滚动居中
+        fs3dLayoutApplied = false;
+        clearFs3dLines();
+      }
+      centerLyricLine(fsLyricContainer, fsTarget);
+    }
   }
 }
 
@@ -2184,6 +2692,8 @@ let lyricRelayoutTimer = 0;
 window.addEventListener('resize', () => {
   clearTimeout(lyricRelayoutTimer);
   lyricRelayoutTimer = setTimeout(() => {
+    // 视口尺寸变了，散布的格子与字号都要按新尺寸重算
+    resetFsSpread();
     syncLyric(audioElement.currentTime || 0, { force: true });
   }, 180);
 });
