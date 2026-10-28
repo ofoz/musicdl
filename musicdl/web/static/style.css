@@ -102,6 +102,13 @@ th.whitespace-nowrap, td.whitespace-nowrap {
 }
 
 /* 7. 全屏沉浸黑胶大播放器 (清新文艺黑胶视效) */
+/* 打开全屏时锁住底层页面滚动（body 的 overflow 会传播到视口）：
+   播放器是 fixed 覆盖，但背后的歌单/搜索结果仍比视口高，不锁的话窗口右侧
+   会一直挂着一条纵向滚动条 —— 它画在全屏层之外，任何 z-index 都盖不住。 */
+body.fs-lock-scroll {
+  overflow: hidden !important;
+}
+
 #fullscreenPlayer {
   transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.45s ease;
 }

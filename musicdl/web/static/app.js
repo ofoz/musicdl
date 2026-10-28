@@ -1415,6 +1415,9 @@ function openFullscreenPlayer() {
   if (state.isFullscreenOpen) return;
   fullscreenPlayer.classList.remove('hidden');
   fullscreenPlayer.scrollTop = 0;
+  // 锁住底层页面的滚动：全屏是 fixed 覆盖，背后的歌单/搜索结果照样比视口高，
+  // 不锁的话窗口右侧会一直挂着一条纵向滚动条，而且它画在全屏层外面，盖不掉
+  document.body.classList.add('fs-lock-scroll');
   const fsMain = fullscreenPlayer.querySelector('main');
   if (fsMain) fsMain.scrollTop = 0;
   requestAnimationFrame(() => {
@@ -1436,6 +1439,8 @@ function closeFullscreenPlayer() {
   setTimeout(() => {
     if (!state.isFullscreenOpen) {
       fullscreenPlayer.classList.add('hidden');
+      // 等收起动画走完再解锁，否则滑出的这 450ms 里滚动条会先冒出来
+      document.body.classList.remove('fs-lock-scroll');
     }
   }, 450);
   state.isFullscreenOpen = false;
