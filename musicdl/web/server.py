@@ -75,6 +75,13 @@ RESULT_EXT_TO_MIME = {
 # 保守按 15 分钟判定过期，避免把已经死掉的直链继续下发给浏览器（播放中途自行停止的主因）
 DIRECT_URL_TTL = int(os.environ.get('MUSICDL_DIRECT_URL_TTL', '900'))
 
+# 下载总开关：默认关闭（本站仅提供在线收听）。
+# 关闭时 /api/stream 只放行「302 直达 CDN」的纯播放请求——那条路径服务端只回一个跳转头，
+# 不消耗任何带宽；而 download=1 / embed_lyric=1 / 指定转码格式 这三种组合都会让服务端
+# 逐字节中转甚至整首进内存转码，等于把自己当成免费下载器，一律 403 拦掉。
+# 重新开放：启动时加 MUSICDL_ALLOW_DOWNLOAD=1（同时把 app.js 的 DOWNLOAD_ENABLED 改回 true）。
+ALLOW_DOWNLOAD = os.environ.get('MUSICDL_ALLOW_DOWNLOAD', '0').strip().lower() in {'1', 'true', 'yes', 'on'}
+
 # 内置默认封面（取不到封面时兜底展示，深/浅色主题下均可见）
 DEFAULT_COVER_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" width="300" height="300">'
@@ -1450,6 +1457,17 @@ def api_stream(token):
     if not entry:
         return jsonify({'error': '音频已失效或未找到', 'code': 'token_missing'}), 404
 
+    is_download = request.args.get('download') == '1'
+    embed_lyric = request.args.get('embed_lyric') == '1'
+    target_format = (request.args.get('format') or 'original').lower().strip().lstrip('.')
+
+    # 放在解析直链之前拦：既省掉一次无谓的外网请求，也避免被当成免费转码服务刷
+    if not ALLOW_DOWNLOAD and (is_download or embed_lyric or target_format not in {'', 'original'}):
+        return jsonify({
+            'error': '本站已关闭下载，仅支持在线收听',
+            'code': 'download_disabled',
+        }), 403
+
     song = entry['song_info']
     url = resolve_instant_stream(song, entry)
 
@@ -1457,10 +1475,6 @@ def api_stream(token):
         # 明确告知前端解析失败，让播放器走「重新解析 / 跳过」逻辑，而不是卡在无声状态
         return jsonify({'error': f'《{getattr(song, "song_name", "")}》暂无可用音频直链',
                         'code': 'no_direct_url'}), 503
-
-    is_download = request.args.get('download') == '1'
-    embed_lyric = request.args.get('embed_lyric') == '1'
-    target_format = (request.args.get('format') or 'original').lower().strip().lstrip('.')
 
     orig_ext = str(getattr(song, 'ext', '') or '').lstrip('.').lower()
     if not orig_ext or orig_ext in {'none', 'null'}:
@@ -2171,6 +2185,10 @@ def api_sync_get(token):
 
 @app.route('/api/download/local', methods=['POST'])
 def api_download_local():
+    if not ALLOW_DOWNLOAD:
+        # 这个接口会让后端把整首歌拉下来写进服务器磁盘，带宽与 IO 都是本站出的
+        return jsonify({'error': '本站已关闭下载，仅支持在线收听', 'code': 'download_disabled'}), 403
+
     data = request.get_json(silent=True) or {}
     token = data.get('token')
     entry = REGISTRY.get(token)

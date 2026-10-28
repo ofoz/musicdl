@@ -31,6 +31,11 @@ const FORMAT_LABELS = {
   'm4a': 'M4A'
 };
 
+// 全局下载开关：本站歌曲暂停提供下载，置 false 时隐藏所有下载入口
+// （列表行内下载、歌单解析列表下载、顶部「格式」设置、下载格式弹窗均不可达）
+// 恢复下载：把下面一行改为 true 即可，顶部「格式」按钮会自动解除 hidden
+const DOWNLOAD_ENABLED = false;
+
 // 安全网络 JSON 解析器：捕获 502/504 等 HTML 异常页面，消除 Unexpected token '<' 报错
 async function safeFetchJson(url, options = {}) {
   const res = await fetch(url, options);
@@ -399,7 +404,14 @@ function updateFormatBadge() {
   }
 }
 
+// 顶部「格式」入口：HTML 里默认 hidden（避免加载前闪一下），下载开启时才显示
+if (DOWNLOAD_ENABLED) {
+  formatPrefBadge.classList.remove('hidden');
+  formatPrefBadge.classList.add('flex');
+}
+
 formatPrefBadge.onclick = () => {
+  if (!DOWNLOAD_ENABLED) return;
   openFormatModal(state.currentTrack || (state.tracks[0] || null), true);
 };
 
@@ -532,6 +544,10 @@ confirmDownloadBtn.onclick = () => {
 };
 
 function requestDownload(track) {
+  if (!DOWNLOAD_ENABLED) {
+    showToast('本站暂不提供下载，仅支持在线畅听');
+    return;
+  }
   if (!track) return;
   if (track.from_playlist || state.tracksSource === 'playlist') {
     showToast('歌单载入歌曲仅支持在线畅听');
@@ -927,7 +943,7 @@ function appendTrackRow(track, index) {
   const lyricBadge = `<span class="track-lyric-badge inline-flex items-center">${getLyricBadgeHtml(track.has_lyric)}</span>`;
 
   const isFromPlaylist = Boolean(track.from_playlist || state.tracksSource === 'playlist');
-  const downloadBtnHtml = isFromPlaylist ? '' : `
+  const downloadBtnHtml = (!DOWNLOAD_ENABLED || isFromPlaylist) ? '' : `
         <button class="row-download-btn p-1.5 rounded-lg text-slate-400 hover:text-emerald-700 hover:bg-emerald-100/80 transition" title="下载音频">
           <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
         </button>
@@ -2219,14 +2235,17 @@ function renderPlaylistTable() {
       </td>
       <td class="py-2.5 px-4 text-slate-600">${escapeHtml(t.singers)}</td>
       <td class="py-2.5 px-4 text-slate-400 font-mono">${t.duration}</td>
-      <td class="py-2.5 px-4 text-right">
+      ${DOWNLOAD_ENABLED ? `<td class="py-2.5 px-4 text-right">
         <button class="playlist-dl-btn text-emerald-600 hover:text-emerald-700 font-medium hover:underline">下载</button>
-      </td>
+      </td>` : ''}
     `;
-    tr.querySelector('.playlist-dl-btn').onclick = (e) => {
-      e.stopPropagation();
-      requestDownload(t);
-    };
+    const playlistDlBtn = tr.querySelector('.playlist-dl-btn');
+    if (playlistDlBtn) {
+      playlistDlBtn.onclick = (e) => {
+        e.stopPropagation();
+        requestDownload(t);
+      };
+    }
     playlistTableBody.appendChild(tr);
   });
 }
