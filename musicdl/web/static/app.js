@@ -184,6 +184,9 @@ function applyTheme(theme, persist = true) {
   }
   // 夜间会把左侧封面栏整栏收起、歌词区重新排版，3D 开关也跟着主题走，统一重排一次
   applyFs3dState();
+  // 沉浸光标只在夜间成立：切回白天必须立刻把光标还回来，
+  // 否则会停在「鼠标看不见」的状态里（这里直接操作类名，避开首屏调用时的 TDZ）
+  if (!isDark) document.documentElement.classList.remove('fs-hide-cursor');
 }
 
 function toggleTheme() {
@@ -1087,41 +1090,85 @@ searchInput.oninput = () => {
 searchBtn.onclick = performSearch;
 
 // 5. Fullscreen Player & Controller Logic
-// ---- 控制区闲置淡出（仅夜间生效，浅色主题不显示该状态） ----
+// ---- 控制区闲置淡出 + 光标隐藏（仅夜间生效，浅色主题不进入该状态） ----
 const FS_IDLE_MS = 3000;
 let fsIdleTimer = 0;
+// 唤醒位移阈值：触控板惯性、桌面轻微震动不该把播放器叫醒（单位 px）
+const FS_WAKE_MOVE_PX = 4;
+// 上一次「算作唤醒」的指针位置，null 表示还没有基准点
+let fsWakeAnchorX = null;
+let fsWakeAnchorY = null;
+
+function isNightMode() {
+  return document.documentElement.classList.contains('dark');
+}
+
+function setFsCursorHidden(hidden) {
+  document.documentElement.classList.toggle('fs-hide-cursor', hidden);
+}
+
+// 闲置到底能不能收：暂停中不行（进度条是暂停后唯一还要看的东西），
+// 音量面板开着也不行（否则像面板自己消失了），白天不参与
+function canFsGoIdle() {
+  if (!state.isFullscreenOpen) return false;
+  if (!isNightMode()) return false;
+  if (audioElement.paused) return false;
+  const volPanel = document.getElementById('fsVolumePanel');
+  if (volPanel && !volPanel.classList.contains('hidden')) return false;
+  return true;
+}
+
+function fsGoIdle() {
+  clearTimeout(fsIdleTimer);
+  if (!canFsGoIdle()) {
+    // 条件不满足时至少保证光标是可见的，别让用户找不着鼠标
+    setFsCursorHidden(false);
+    return;
+  }
+  fullscreenPlayer.classList.add('fs-idle');
+  setFsCursorHidden(true);
+}
 
 function wakeFullscreenChrome() {
   if (!fullscreenPlayer) return;
   fullscreenPlayer.classList.remove('fs-idle');
+  setFsCursorHidden(false);
   clearTimeout(fsIdleTimer);
   if (!state.isFullscreenOpen) return;
-  fsIdleTimer = setTimeout(() => {
-    if (!state.isFullscreenOpen) return;
-    // 暂停时不淡出：进度条是暂停后唯一还需要看的东西
-    if (audioElement.paused) return;
-    // 音量面板开着时不能藏，否则看起来像面板自己消失了
-    const volPanel = document.getElementById('fsVolumePanel');
-    if (volPanel && !volPanel.classList.contains('hidden')) return;
-    fullscreenPlayer.classList.add('fs-idle');
-  }, FS_IDLE_MS);
+  fsIdleTimer = setTimeout(fsGoIdle, FS_IDLE_MS);
+}
+
+// 指针移动单独处理：需要过位移阈值才唤醒，但光标已经藏起来时必须一击即醒
+// （此时用户看不见光标在哪，多等 4px 会觉得「鼠标没反应」）
+function handleFsPointerMove(e) {
+  const cursorHidden = document.documentElement.classList.contains('fs-hide-cursor');
+  if (!cursorHidden && fsWakeAnchorX !== null) {
+    const dx = e.clientX - fsWakeAnchorX;
+    const dy = e.clientY - fsWakeAnchorY;
+    if (dx * dx + dy * dy < FS_WAKE_MOVE_PX * FS_WAKE_MOVE_PX) return;
+  }
+  // 基准点只在真正唤醒时更新：慢慢挪鼠标也能累计够 4px，而不是被逐帧差量吃掉
+  fsWakeAnchorX = e.clientX;
+  fsWakeAnchorY = e.clientY;
+  wakeFullscreenChrome();
 }
 
 function stopFullscreenChromeIdle() {
   clearTimeout(fsIdleTimer);
+  fsWakeAnchorX = null;
+  fsWakeAnchorY = null;
   if (fullscreenPlayer) fullscreenPlayer.classList.remove('fs-idle');
+  setFsCursorHidden(false);
 }
 
-['pointermove', 'pointerdown', 'wheel', 'keydown'].forEach((evt) => {
+fullscreenPlayer.addEventListener('pointermove', handleFsPointerMove, { passive: true });
+['pointerdown', 'wheel', 'keydown'].forEach((evt) => {
   fullscreenPlayer.addEventListener(evt, wakeFullscreenChrome, { passive: true });
 });
 
 // 指针移出播放器（比如移到浏览器外）不必等满 3 秒，直接收起来
 fullscreenPlayer.addEventListener('pointerleave', () => {
-  clearTimeout(fsIdleTimer);
-  if (state.isFullscreenOpen && !audioElement.paused) {
-    fullscreenPlayer.classList.add('fs-idle');
-  }
+  if (state.isFullscreenOpen && !audioElement.paused) fsGoIdle();
 });
 
 // ===== 夜间 3D 歌词剧场 =====

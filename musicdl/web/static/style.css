@@ -937,6 +937,15 @@ html.dark #fullscreenPlayer.fs-idle footer {
   opacity: 0.1;
 }
 
+/* ---------- 夜间沉浸：闲置后连光标一起收起来 ----------
+   挂在 <html> 上而不是播放器上：播放器里满是 cursor-pointer 的按钮，
+   只有挂到公共祖先、再对整棵子树 !important，才压得住这些局部样式。
+   类名由 JS 在夜间闲置满 3 秒时添加，鼠标一动立即移除。 */
+html.fs-hide-cursor,
+html.fs-hide-cursor * {
+  cursor: none !important;
+}
+
 /* ---------- 歌词三档字号：当前行 / 邻行 / 其余 ---------- */
 /* display:block 是关键：原来的 inline-block 会让几条短句并排挤在同一行 */
 .fs-lyric-line {
