@@ -20,6 +20,9 @@ services:
     volumes:
       # 持久化保存下载的音乐和缓存数据
       - ./downloads:/app/downloads
+      # 前端静态资源直接映射宿主机：Dockerfile 里是 COPY . .，
+      # 不挂载的话改了 HTML/CSS/JS 必须 --build 才会进容器（git pull 只改了宿主机）
+      - ./musicdl/web/static:/app/musicdl/web/static:ro
     environment:
       - TZ=Asia/Shanghai
     logging:

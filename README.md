@@ -98,6 +98,7 @@ docker compose ps                # 健康检查通过后即为 running (healthy)
 
 - 端口**只绑定宿主机 `127.0.0.1:5050`**，不直接暴露公网（需要外网访问请改端口映射或走反代）；
 - 下载与缓存持久化到宿主机 `./downloads`；
+- **前端静态资源挂载自宿主机 `./musicdl/web/static`**（只读），改动页面后 `git pull` 刷新即生效，无需重建镜像；后端 Python 改动仍需 rebuilt（见[更新版本](#4-更新版本)）；
 - 镜像基于 `python:3.11-slim`，音频转码走 PyAV（自带 FFmpeg 库）；若要使用 Apple Music / TIDAL 等依赖外部命令的音源，需自行在镜像内补装 `ffmpeg` 等工具（见[上游安装文档](https://musicdl.readthedocs.io/)）；
 - 时区 `Asia/Shanghai`，并自带 `HEALTHCHECK`（30 秒巡检一次首页）。
 
@@ -236,6 +237,30 @@ proxy_read_timeout 600s;
 proxy_send_timeout 600s;
 ```
 
+### 4. 更新版本
+
+`Dockerfile` 用 `COPY . .` 把代码打进镜像层，**镜像建好之后容器里的文件就是只读快照**。所以宿主机上 `git pull` 只更新了宿主机目录，跑着的容器读的仍是旧代码 —— 光 `docker compose up -d` 也不会变，它只会复用旧镜像。
+
+分两种情况：
+
+```bash
+cd /opt/musicdl && git pull origin main
+
+# A. 只改了前端（index.html / style.css / app.js）—— compose 已挂载静态目录，直接生效
+#    刷新浏览器即可，必要时 Ctrl+F5
+
+# B. 改了后端 Python（server.py 等）或依赖 —— 必须重建镜像
+docker compose up -d --build musicdl
+```
+
+验证容器里到底是哪一版（静态文件里带 `?v=` 版本号，最直观）：
+
+```bash
+docker compose exec musicdl grep -o 'v=[0-9_]*' /app/musicdl/web/static/index.html
+```
+
+> 静态目录的只读挂载写在仓库的 `docker-compose.yml` 里。**老部署**（在 1Panel 里粘贴过编排内容的）需要重新粘贴一次编排，只 `git pull` 不会改到已生效的 compose 配置。挂载的宿主机目录若不存在，Docker 会自动建成空目录，页面会 404，确认 `./musicdl/web/static` 在仓库里存在后再启动。
+
 ## 🧪 测试
 
 `tests/` 下的脚本大多是**对着已启动服务**的端到端校验（基址写死 `http://127.0.0.1:5050`），
@@ -263,6 +288,7 @@ python tests/verify_sources.py             # 逐个音源连通性体检
 | 下载的中文文件名乱码 | 已用 RFC 5987/6266 编码；若仍乱码请检查浏览器与反代是否改写 `Content-Disposition` |
 | 找不到下载的文件 | WebUI 的下载由浏览器保存到其默认下载目录；`--work-dir` 只作用于服务端缓存与 `/api/download/local` 落盘 |
 | 封面偶尔空白 | 平台封面缺失，接口会返回内置 SVG 兜底，不影响播放 |
+| `git pull` 后刷新页面没变化 | 容器里是构建时的代码快照，前端需 compose 挂载静态目录（已内置），后端改动要 `docker compose up -d --build musicdl`；详见[更新版本](#4-更新版本) |
 
 ## ⚠️ 免责声明
 
